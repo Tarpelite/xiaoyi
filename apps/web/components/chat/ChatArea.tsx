@@ -173,13 +173,13 @@ export function ChatArea() {
     setMessages((prev: Message[]) => [...prev, assistantMessage])
     
     try {
-      // 导入API函数
-      const { sendMessageStream } = await import('@/lib/api/chat')
+      // 导入API函数（使用真实API）
+      const { sendMessageStreamReal } = await import('@/lib/api/chat')
       
       // 处理流式响应
       const contents: (TextContent | ChartContent | TableContent)[] = []
       
-      for await (const chunk of sendMessageStream(inputValue, (steps: Step[]) => {
+      for await (const chunk of sendMessageStreamReal(inputValue, (steps: Step[]) => {
         // 更新步骤状态
         setMessages((prev: Message[]) => prev.map((msg: Message) => 
           msg.id === assistantMessageId 

@@ -275,6 +275,9 @@ export async function* sendMessageStreamReal(
     buffer = lines.pop() || ''
 
     for (const line of lines) {
+      // 跳过空行
+      if (!line.trim()) continue
+      
       if (line.startsWith('data: ')) {
         try {
           const data = JSON.parse(line.slice(6))
@@ -290,7 +293,7 @@ export async function* sendMessageStreamReal(
             throw new Error(data.message || 'Unknown error')
           }
         } catch (e) {
-          console.error('Parse error:', e)
+          console.error('Parse error:', e, 'Line:', line)
         }
       }
     }
