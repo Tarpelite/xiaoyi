@@ -10,8 +10,14 @@ from typing import Dict, Any
 from .nlp_agent import NLPAgent
 from .report_agent import ReportAgent
 from app.data import DataFetcher
-from app.forecasting import TimeSeriesAnalyzer, ProphetForecaster, XGBoostForecaster, DLinearForecaster, \
-    RandomForestForecaster
+from app.forecasting import (
+    TimeSeriesAnalyzer,
+    ProphetForecaster,
+    XGBoostForecaster,
+    DLinearForecaster,
+    RandomForestForecaster,
+    AutoARIMAForecaster
+)
 
 
 class FinanceChatAgent:
@@ -41,6 +47,7 @@ class FinanceChatAgent:
         self.xgboost_forecaster = XGBoostForecaster()
         self.randomforest_forecaster = RandomForestForecaster()
         self.dlinear_forecaster = DLinearForecaster()
+        self.autoarima_forecaster = AutoARIMAForecaster()
 
     def chat(self, user_input: str, model: str = "prophet", verbose: bool = True) -> Dict[str, Any]:
         """
@@ -97,14 +104,19 @@ class FinanceChatAgent:
         model_name = model.lower() if model else analysis_config.get("model", "prophet").lower()
 
         # 验证模型名称
-        if model_name not in ["prophet", "xgboost"]:
-            raise ValueError(f"不支持的模型: {model_name}。支持: 'prophet', 'xgboost'")
+        valid_models = ["prophet", "xgboost", "randomforest", "dlinear", "autoarima"]
+        if model_name not in valid_models:
+            raise ValueError(f"不支持的模型: {model_name}。支持: {', '.join(valid_models)}")
 
         # 选择预测器
-        if model_name == "prophet":
-            forecast_result = self.prophet_forecaster.forecast(df, horizon)
-        else:  # xgboost
-            forecast_result = self.xgboost_forecaster.forecast(df, horizon)
+        forecasters = {
+            "prophet": self.prophet_forecaster,
+            "xgboost": self.xgboost_forecaster,
+            "randomforest": self.randomforest_forecaster,
+            "dlinear": self.dlinear_forecaster,
+            "autoarima": self.autoarima_forecaster,
+        }
+        forecast_result = forecasters[model_name].forecast(df, horizon)
 
         if verbose:
             print(f"   → 模型: {forecast_result['model']}")

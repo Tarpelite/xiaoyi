@@ -11,6 +11,7 @@ from .prophet_forecaster import ProphetForecaster
 from .xgboost_forecaster import XGBoostForecaster
 from .randomforest_forecaster import RandomForestForecaster
 from .dlinear_forecaster import DLinearForecaster
+from .arima_forecaster import AutoARIMAForecaster
 
 __all__ = [
     "BaseForecaster",
@@ -19,4 +20,5 @@ __all__ = [
     "XGBoostForecaster",
     "RandomForestForecaster",
     "DLinearForecaster",
+    "AutoARIMAForecaster",
 ]

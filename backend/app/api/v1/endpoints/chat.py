@@ -7,11 +7,12 @@ from app.core.utils import format_sse, df_to_table, df_to_chart, detect_anomalie
 from app.agents import FinanceChatAgent
 from app.data import DataFetcher
 from app.forecasting import (
-    TimeSeriesAnalyzer, 
-    ProphetForecaster, 
+    TimeSeriesAnalyzer,
+    ProphetForecaster,
     XGBoostForecaster,
     RandomForestForecaster,
-    DLinearForecaster
+    DLinearForecaster,
+    AutoARIMAForecaster
 )
 
 router = APIRouter()
@@ -34,8 +35,8 @@ async def chat_stream(request: ChatRequest):
             model = request.model.lower() if request.model else "prophet"
             
             # 验证模型名称
-            if model not in ["prophet", "xgboost", "randomforest", "dlinear"]:
-                yield format_sse("error", {"message": f"不支持的模型: {model}。支持: 'prophet', 'xgboost', 'randomforest', 'dlinear'"})
+            if model not in ["prophet", "xgboost", "randomforest", "dlinear", "autoarima"]:
+                yield format_sse("error", {"message": f"不支持的模型: {model}。支持: 'prophet', 'xgboost', 'randomforest', 'dlinear', 'autoarima'"})
                 return
             
             # 初始化步骤状态
@@ -111,17 +112,20 @@ async def chat_stream(request: ChatRequest):
             
             # 根据选择的模型进行预测
             if model == "prophet":
-                prophet_forecaster = ProphetForecaster()
-                forecast_result = await asyncio.to_thread(prophet_forecaster.forecast, df, horizon)
+                forecaster = ProphetForecaster()
+                forecast_result = await asyncio.to_thread(forecaster.forecast, df, horizon)
             elif model == "xgboost":
-                xgboost_forecaster = XGBoostForecaster()
-                forecast_result = await asyncio.to_thread(xgboost_forecaster.forecast, df, horizon)
+                forecaster = XGBoostForecaster()
+                forecast_result = await asyncio.to_thread(forecaster.forecast, df, horizon)
             elif model == "randomforest":
-                rf_forecaster = RandomForestForecaster()
-                forecast_result = await asyncio.to_thread(rf_forecaster.forecast, df, horizon)
+                forecaster = RandomForestForecaster()
+                forecast_result = await asyncio.to_thread(forecaster.forecast, df, horizon)
+            elif model == "autoarima":
+                forecaster = AutoARIMAForecaster()
+                forecast_result = await asyncio.to_thread(forecaster.forecast, df, horizon)
             else:  # dlinear
-                dlinear_forecaster = DLinearForecaster()
-                forecast_result = await asyncio.to_thread(dlinear_forecaster.forecast, df, horizon)
+                forecaster = DLinearForecaster()
+                forecast_result = await asyncio.to_thread(forecaster.forecast, df, horizon)
             
             # 获取模型指标信息
             metrics_info = ", ".join([f"{k.upper()}: {v}" for k, v in forecast_result['metrics'].items()])
