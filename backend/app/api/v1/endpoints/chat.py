@@ -4,11 +4,9 @@ from fastapi.responses import StreamingResponse
 from app.core.config import settings
 from app.models.chat import ChatRequest
 from app.core.utils import format_sse, df_to_table, df_to_chart, detect_anomalies, forecast_to_chart, STEPS
-from app.services.finance_agent import (
-    FinanceChatAgent, 
-    DataFetcher, 
-    TimeSeriesAnalyzer,
-)
+from app.agents import FinanceChatAgent
+from app.data import DataFetcher
+from app.forecasting import TimeSeriesAnalyzer, ProphetForecaster, XGBoostForecaster
 
 router = APIRouter()
 
@@ -107,9 +105,11 @@ async def chat_stream(request: ChatRequest):
             
             # 根据选择的模型进行预测
             if model == "prophet":
-                forecast_result = await asyncio.to_thread(TimeSeriesAnalyzer.forecast_prophet, df, horizon)
+                prophet_forecaster = ProphetForecaster()
+                forecast_result = await asyncio.to_thread(prophet_forecaster.forecast, df, horizon)
             else:  # xgboost
-                forecast_result = await asyncio.to_thread(TimeSeriesAnalyzer.forecast_xgboost, df, horizon)
+                xgboost_forecaster = XGBoostForecaster()
+                forecast_result = await asyncio.to_thread(xgboost_forecaster.forecast, df, horizon)
             
             # 获取模型指标信息
             metrics_info = ", ".join([f"{k.upper()}: {v}" for k, v in forecast_result['metrics'].items()])
