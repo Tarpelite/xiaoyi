@@ -11,6 +11,7 @@ from .nlp_agent import NLPAgent
 from .report_agent import ReportAgent
 from app.data import DataFetcher
 from app.forecasting import TimeSeriesAnalyzer, ProphetForecaster, XGBoostForecaster
+from app.sentiment import SentimentAnalyzer
 
 
 class FinanceChatAgent:
@@ -34,7 +35,8 @@ class FinanceChatAgent:
         
         self.nlp = NLPAgent(self.api_key)
         self.reporter = ReportAgent(self.api_key)
-        
+        self.sentiment_analyzer = SentimentAnalyzer(self.api_key)
+
         # 预测器实例
         self.prophet_forecaster = ProphetForecaster()
         self.xgboost_forecaster = XGBoostForecaster()
@@ -72,34 +74,125 @@ class FinanceChatAgent:
         # Step 2: 获取数据
         if verbose:
             print("\n📊 Step 2: 获取数据...")
-        
+
         raw_df = DataFetcher.fetch(data_config)
         df = DataFetcher.prepare(raw_df, data_config)
-        
-        # Step 3: 特征分析
+
         if verbose:
-            print("\n📈 Step 3: 分析特征...")
+            print(f"\n   📈 股价原始数据 (最近5条):")
+            print("-" * 50)
+            if not raw_df.empty:
+                # 显示最后5行
+                display_df = raw_df.tail(5)
+                for _, row in display_df.iterrows():
+                    date_val = row.get('日期', row.get('date', 'N/A'))
+                    close_val = row.get('收盘', row.get('close', 'N/A'))
+                    open_val = row.get('开盘', row.get('open', 'N/A'))
+                    high_val = row.get('最高', row.get('high', 'N/A'))
+                    low_val = row.get('最低', row.get('low', 'N/A'))
+                    vol_val = row.get('成交量', row.get('volume', 'N/A'))
+                    print(f"   {date_val} | 开:{open_val} 高:{high_val} 低:{low_val} 收:{close_val} 量:{vol_val}")
+            print("-" * 50)
+
+        # 提取股票代码用于获取新闻
+        stock_symbol = data_config.get("params", {}).get("symbol", "")
+
+        # Step 3: 获取新闻 & 情绪分析
+        if verbose:
+            print("\n📰 Step 3: 获取新闻 & 情绪分析...")
+
+        news_df = DataFetcher.fetch_news(symbol=stock_symbol, limit=50)
+
+        if verbose:
+            print(f"\n   📰 新闻原始数据 (最近10条):")
+            print("-" * 60)
+            if not news_df.empty:
+                # 尝试不同的列名
+                title_col = next((c for c in ["新闻标题", "标题", "title"] if c in news_df.columns), None)
+                time_col = next((c for c in ["发布时间", "时间", "datetime"] if c in news_df.columns), None)
+                source_col = next((c for c in ["文章来源", "来源", "source"] if c in news_df.columns), None)
+
+                for i, (_, row) in enumerate(news_df.head(10).iterrows()):
+                    title = row[title_col][:50] + "..." if title_col and len(str(row[title_col])) > 50 else (row[title_col] if title_col else "N/A")
+                    time_val = row[time_col] if time_col else ""
+                    source_val = row[source_col] if source_col else ""
+                    print(f"   {i+1}. [{time_val}] {title}")
+                    if source_val:
+                        print(f"      来源: {source_val}")
+            else:
+                print("   (无新闻数据)")
+            print("-" * 60)
+
+        sentiment_result = self.sentiment_analyzer.analyze(news_df)
+
+        if verbose:
+            print(f"\n   🎭 情绪分析结果:")
+            print("-" * 60)
+            print(f"   整体情绪: {sentiment_result['sentiment']}")
+            print(f"   情绪得分: {sentiment_result['overall_score']:.2f} (范围: -1 到 1)")
+            print(f"   置信度:   {sentiment_result.get('confidence', 0):.2f}")
+            print(f"   新闻数量: {sentiment_result['news_count']}")
+            print(f"\n   关键事件:")
+            for i, event in enumerate(sentiment_result.get('key_events', [])[:5], 1):
+                print(f"      {i}. {event}")
+            print(f"\n   分析说明: {sentiment_result.get('analysis_text', '无')}")
+            print("-" * 60)
+
+        # Step 4: 特征分析
+        if verbose:
+            print("\n📈 Step 4: 分析特征...")
         
         features = TimeSeriesAnalyzer.analyze_features(df)
         
         if verbose:
             print(f"   → 趋势: {features['trend']}, 波动: {features['volatility']}")
             print(f"   → 最新价: {features['latest']}")
-        
-        # Step 4: 预测
+
+        # Step 5: 参数推荐
         if verbose:
-            print("\n🔮 Step 4: 执行预测...")
-        
+            print("\n⚙️ Step 5: 参数推荐...")
+
+        prophet_params = self.sentiment_analyzer.recommend_params(sentiment_result, features)
+
+        if verbose:
+            # 默认参数
+            default_params = {
+                "changepoint_prior_scale": 0.05,
+                "seasonality_prior_scale": 10,
+                "changepoint_range": 0.8
+            }
+
+            print(f"\n   🔧 Prophet 参数配置:")
+            print("-" * 60)
+            print(f"   {'参数名':<30} {'默认值':<10} {'推荐值':<10} {'变化':<10}")
+            print("-" * 60)
+
+            for param, default_val in default_params.items():
+                new_val = prophet_params.get(param, default_val)
+                if new_val != default_val:
+                    change = f"{'↑' if new_val > default_val else '↓'} {abs(new_val - default_val):.3f}"
+                else:
+                    change = "无变化"
+                print(f"   {param:<30} {default_val:<10} {new_val:<10.3f} {change:<10}")
+
+            print("-" * 60)
+            print(f"\n   💡 推荐理由: {prophet_params.get('reasoning', '使用默认参数')}")
+            print("-" * 60)
+
+        # Step 6: 预测
+        if verbose:
+            print("\n🔮 Step 6: 执行预测...")
+
         horizon = analysis_config.get("forecast_horizon", 30)
         model_name = model.lower() if model else analysis_config.get("model", "prophet").lower()
-        
+
         # 验证模型名称
         if model_name not in ["prophet", "xgboost"]:
             raise ValueError(f"不支持的模型: {model_name}。支持: 'prophet', 'xgboost'")
-        
+
         # 选择预测器
         if model_name == "prophet":
-            forecast_result = self.prophet_forecaster.forecast(df, horizon)
+            forecast_result = self.prophet_forecaster.forecast(df, horizon, prophet_params=prophet_params)
         else:  # xgboost
             forecast_result = self.xgboost_forecaster.forecast(df, horizon)
         
@@ -107,14 +200,14 @@ class FinanceChatAgent:
             print(f"   → 模型: {forecast_result['model']}")
             metrics_str = ", ".join([f"{k.upper()}: {v}" for k, v in forecast_result['metrics'].items()])
             print(f"   → 指标: {metrics_str}")
-        
-        # Step 5: 生成报告
+
+        # Step 7: 生成报告
         if verbose:
-            print("\n📋 Step 5: 生成报告...")
-        
+            print("\n📋 Step 7: 生成报告...")
+
         user_question = analysis_config.get("user_question", user_input)
-        report = self.reporter.generate(user_question, features, forecast_result)
-        
+        report = self.reporter.generate(user_question, features, forecast_result, sentiment_result)
+
         # 结果
         result = {
             "config": {
@@ -127,6 +220,8 @@ class FinanceChatAgent:
                 "df": df,  # 标准化后的数据
             },
             "features": features,
+            "sentiment": sentiment_result,
+            "prophet_params": prophet_params,
             "forecast": forecast_result["forecast"],
             "metrics": forecast_result["metrics"],
             "report": report,
