@@ -1,0 +1,38 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - v*
+  workflow_dispatch:
+
+jobs:
+  pypi:
+    name: Publish to PyPI
+    runs-on: ubuntu-latest
+    environment:
+      name: release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Clone repo
+        uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Build package
+        run: uv build
+
+      - name: Perform import test (wheel)
+        run: uv run --isolated --no-project -p 3.13 --with dist/*.whl -- python -c "from timecopilot import TimeCopilot"
+
+      - name: Perform import test (source distribution)
+        run: uv run --isolated --no-project -p 3.13 --with dist/*.tar.gz -- python -c "from timecopilot import TimeCopilot"
+
+      - name: Publish package
+        run: uv publish --trusted-publishing always
+
+      - name: After publishing test
+        run: uv run --isolated --no-project -p 3.13 --with timecopilot -- python -c "from timecopilot import TimeCopilot"

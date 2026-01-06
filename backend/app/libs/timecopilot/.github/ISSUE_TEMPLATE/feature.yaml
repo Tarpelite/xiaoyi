@@ -1,0 +1,32 @@
+# Template adapted from Pydantic-AI issue templates
+# Source: https://github.com/pydantic/pydantic-ai
+
+name: TimeCopilot - Feature Request
+description: Suggest a new feature to implement
+title: "feat: "
+labels: ["enhancement"]
+
+body:
+  - type: markdown
+    attributes:
+      value: We appreciate your contribution to TimeCopilot!
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: |
+        Tell us about the feature you'd like to implement. You might include: 
+        * A demo or example
+        * Relevant use case(s)
+        * References to similar projects or features
+    validations:
+      required: true
+
+  - type: textarea
+    id: references
+    attributes:
+      label: Additional context
+      description: |
+        Describe any alternative solutions or features you've considered.
+        Include any other context about the feature request here.

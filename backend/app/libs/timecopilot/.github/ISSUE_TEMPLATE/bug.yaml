@@ -1,0 +1,56 @@
+# Template adapted from Pydantic-AI issue templates
+# Source: https://github.com/pydantic/pydantic-ai
+
+name: TimeCopilot - Bug Report
+description: Report a bug or unexpected behavior
+title: "bug: "
+labels: bug
+
+body:
+  - type: markdown
+    attributes:
+      value: We appreciate your contribution to TimeCopilot! 
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Initial Checklist
+      description: Ensure you comply with the following before moving ahead.
+      options:
+        - label: I confirm that I'm using the latest version of TimeCopilot.
+          required: true
+        - label: I confirm that I've reviewed my issue at https://github.com/AzulGarza/timecopilot/issues before opening this one. 
+          required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened? 
+      description: |
+        Explain what you're seeing and the outcome you expect.
+      placeholder: Tell us what you see!
+      value: |
+        Steps to reproduce the behavior...
+        1. Go to '...'
+        2. Click on '....'
+        3. Scroll down to '....'
+        4. See error
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log output
+      description: Copy and paste any relevant log output. This will be automatically formatted into code, so no need for backticks.
+      render: shell
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: |
+        Which version of TimeCopilot are you using? Specify details of your local environment such as OS, architecture, Python and TimeCopilot's version. 
+      render: Text
+    validations:
+      required: true

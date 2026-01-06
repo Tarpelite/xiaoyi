@@ -1,0 +1,132 @@
+[build-system]
+build-backend = "hatchling.build"
+requires = ["hatchling"]
+
+[dependency-groups]
+dev = [
+  "mktestdocs>=0.2.5",
+  "pre-commit",
+  "pytest",
+  "pytest-asyncio>=1.1.0",
+  "pytest-cov",
+  "pytest-mock>=3.15.1",
+  "pytest-rerunfailures>=15.1",
+  "pytest-xdist>=3.8.0",
+  "s3fs>=2025.3.0",
+]
+docs = [
+  "mkdocs-include-markdown-plugin>=7.1.6",
+  "mkdocs-jupyter>=0.25.1",
+  "mkdocs-material>=9.6.14",
+  "mkdocs>=1.6.1",
+  "mkdocstrings[python]>=0.29.1",
+  "mktestdocs>=0.2.5",
+  "modal>=1.0.4",
+  "ruff>=0.12.1",
+]
+
+[project]
+authors = [
+  {email = "azul.garza.r@gmail.com", name = "Azul Garza"},
+]
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Information Technology",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python",
+  "Topic :: Internet",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+  "fire",
+  "gluonts[torch]",
+  "huggingface-hub>=0.34.4",
+  "lightgbm>=4.6.0",
+  "logfire>=4.7.0",
+  "mlforecast>=1.0.2",
+  "neuralforecast>=3.0.2",
+  "nixtla>=0.6.6",
+  "openai>=1.99.7",
+  "pandas>=2.2.0 ; python_full_version >= '3.13'",
+  "prophet>=1.1.7",
+  "pydantic-ai>=0.7.0",
+  "scipy<=1.15.3",
+  "statsforecast",
+  "tabpfn-time-series==1.0.3 ; python_full_version < '3.13'",
+  "timecopilot-chronos-forecasting>=0.2.0",
+  "timecopilot-granite-tsfm>=0.1.1",
+  "timecopilot-timesfm>=0.2.1",
+  "timecopilot-tirex>=0.1.0 ; python_full_version >= '3.11'",
+  "timecopilot-toto>=0.1.3",
+  "timecopilot-uni2ts>=0.1.2 ; python_full_version < '3.14'",
+  "transformers==4.40.1 ; python_full_version < '3.13'",
+  "transformers>=4.48,<5 ; python_full_version >= '3.13'",
+  "tsfeatures",
+  "utilsforecast[plotting]",
+]
+description = "The GenAI Forecasting Agent · LLMs × Time Series Foundation Models"
+license = "MIT"
+name = "timecopilot"
+readme = "README.md"
+requires-python = ">=3.10"
+version = "0.0.22"
+
+[project.scripts]
+timecopilot = "timecopilot._cli:main"
+
+[tool.coverage]
+branch = true
+source = ["timecopilot"]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
+
+[tool.coverage.run]
+omit = [
+  "tests/*",
+]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.mypy]
+disable_error_code = ["no-redef"] # for fasthtml
+
+[tool.pytest.ini_options]
+addopts = "-m 'not docs and not live and not gift_eval' -n auto"
+markers = [
+  "docs: marks tests related to documentation",
+  "flaky: rerun failures (provided by pytest-rerunfailures)",
+  "gift_eval: marks tests related to gift eval results replication",
+  "live: marks tests that require calls to llm providers",
+]
+testpaths = ["tests"]
+
+[tool.ruff]
+fix = true
+line-length = 88
+src = ["timecopilot"]
+
+[tool.ruff.format]
+docstring-code-format = true
+docstring-code-line-length = 20
+
+[tool.ruff.lint]
+ignore = [
+  "F811", # redefined function, this is helpful for fasthtml
+]
+select = ["B", "E", "F", "I", "SIM", "UP"]
+
+[tool.ruff.lint.isort]
+known-local-folder = ["timecopilot"]
+no-lines-before = ["local-folder"]

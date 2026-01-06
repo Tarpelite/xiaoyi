@@ -1,0 +1,126 @@
+name: CI 
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test on ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    env:
+      UV_PYTHON: ${{ matrix.python-version }}
+
+    steps:
+      - name: Clone repo
+        uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6 
+        with:
+          enable-cache: true
+
+      - name: Run tests 
+        run: uv run pytest
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+
+      - name: Test import class
+        run: uv run -- python -c "from timecopilot import TimeCopilot, TimeCopilotForecaster" 
+
+  test-live:
+    name: test live
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+
+    steps:
+      - name: Clone repo
+        uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6 
+        with:
+          enable-cache: true
+
+      - name: Run tests 
+        run: uv run pytest -m live
+        env: 
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }} 
+
+  test-gift-eval:
+    name: test gift eval
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+
+    steps:
+      - name: Clone repo
+        uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Run tests
+        run: uv run pytest -m gift_eval -x -n 0
+
+  test-docs:
+    name: test docs
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+    env:
+      UV_PYTHON: 3.11
+    steps:
+      - name: Clone repo
+        uses: actions/checkout@v4
+        
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Run tests
+        run: uv run pytest -m docs -x -n 0
+        env: 
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }} 
+          OLLAMA_BASE_URL: "URL_PLACEHOLDER"
+
+  build-docs:
+    name: build docs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone repo
+        uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Build docs
+        run: uv run --group docs mkdocs build
+
+  lint:
+    name: lint and style checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone repo
+        uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Run pre-commit
+        run: uvx pre-commit run --all-files

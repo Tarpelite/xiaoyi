@@ -1,0 +1,42 @@
+name: Notify Release
+
+on:
+  push:
+    tags:
+      - v*
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to simulate"
+        required: true
+
+jobs:
+  discord:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare env
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "TAG=${{ github.event.inputs.tag }}" >> "$GITHUB_ENV"
+          else
+            echo "TAG=${GITHUB_REF_NAME}" >> "$GITHUB_ENV"
+          fi
+
+      - name: Read changelog
+        id: changelog
+        uses: andstor/file-reader-action@v1
+        with:
+          path: 'docs/changelogs/${{ env.TAG }}.md'
+
+      - name: Notify Discord
+        uses: rjstone/discord-webhook-notify@v2
+        with:
+          webhookUrl: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          username: TimeCopilot Releases
+          severity: info
+          title: "🚀 New release ${{ env.TAG }}"
+          description: "Changelog also available at https://timecopilot.dev/changelogs/${{ env.TAG }}/"
+          details: ${{ steps.changelog.outputs.contents }}
+          footer: "pushed via GitHub Actions"
