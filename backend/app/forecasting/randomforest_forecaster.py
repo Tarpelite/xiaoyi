@@ -1,8 +1,8 @@
 """
-XGBoost 预测模型
-================
+RandomForest 预测模型
+=====================
 
-基于 XGBoost 的时序预测实现
+基于 RandomForest 的时序预测实现
 """
 
 from typing import Dict, Any
@@ -11,15 +11,14 @@ import pandas as pd
 import numpy as np
 from .base import BaseForecaster
 from .analyzer import TimeSeriesAnalyzer
-import xgboost as xgb
 
 
-class XGBoostForecaster(BaseForecaster):
-    """XGBoost 时序预测器"""
+class RandomForestForecaster(BaseForecaster):
+    """RandomForest 时序预测器"""
     
     def forecast(self, df: pd.DataFrame, horizon: int = 30) -> Dict[str, Any]:
         """
-        使用 XGBoost 模型进行时序预测
+        使用 RandomForest 模型进行时序预测
         
         Args:
             df: 标准化的时序数据，包含 ds 和 y 列
@@ -29,12 +28,17 @@ class XGBoostForecaster(BaseForecaster):
             预测结果字典
             
         Raises:
-            ImportError: 未安装 xgboost
+            ImportError: 未安装 scikit-learn
             ValueError: 数据量不足
         """
+        try:
+            from sklearn.ensemble import RandomForestRegressor
+        except ImportError:
+            raise ImportError("请安装 scikit-learn: pip install scikit-learn")
+        
         # 检查数据量
         if len(df) < 60:
-            raise ValueError(f"XGBoost 需要至少60条历史数据，当前只有 {len(df)} 条")
+            raise ValueError(f"RandomForest 需要至少60条历史数据，当前只有 {len(df)} 条")
         
         # 创建特征
         feature_df = TimeSeriesAnalyzer.create_features(df, max_lag=min(30, len(df) // 2))
@@ -50,42 +54,15 @@ class XGBoostForecaster(BaseForecaster):
         y_train, y_val = y[:split_idx], y[split_idx:]
         
         # 训练模型
-        model = xgb.XGBRegressor(
+        model = RandomForestRegressor(
             n_estimators=100,
-            max_depth=5,
-            learning_rate=0.1,
-            subsample=0.8,
-            colsample_bytree=0.8,
+            max_depth=10,
+            min_samples_split=5,
+            min_samples_leaf=2,
             random_state=42,
             n_jobs=-1
         )
-        
-        # 兼容不同版本的 XGBoost
-        try:
-            # 尝试新版本方式 (XGBoost 2.0+)
-            try:
-                early_stop = xgb.callback.EarlyStopping(rounds=10, save_best=True)
-                model.fit(
-                    X_train, y_train,
-                    eval_set=[(X_val, y_val)],
-                    callbacks=[early_stop],
-                    verbose=False
-                )
-            except (AttributeError, TypeError):
-                # 如果 callback 方式失败，尝试旧版本方式
-                model.fit(
-                    X_train, y_train,
-                    eval_set=[(X_val, y_val)],
-                    early_stopping_rounds=10,
-                    verbose=False
-                )
-        except TypeError:
-            # 如果两种方式都失败，不使用 early stopping
-            model.fit(
-                X_train, y_train,
-                eval_set=[(X_val, y_val)],
-                verbose=False
-            )
+        model.fit(X_train, y_train)
         
         # 计算残差用于置信区间
         train_pred = model.predict(X)
@@ -108,7 +85,7 @@ class XGBoostForecaster(BaseForecaster):
                 "mae": round(float(mae), 4),
                 "rmse": round(float(rmse), 4)
             },
-            "model": "xgboost"
+            "model": "randomforest"
         }
     
     def _recursive_forecast(

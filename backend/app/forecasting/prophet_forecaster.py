@@ -9,7 +9,7 @@ from typing import Dict, Any
 import pandas as pd
 import numpy as np
 from .base import BaseForecaster
-
+from prophet import Prophet
 
 class ProphetForecaster(BaseForecaster):
     """Prophet 时序预测器"""
@@ -25,7 +25,6 @@ class ProphetForecaster(BaseForecaster):
         Returns:
             预测结果字典
         """
-        from prophet import Prophet
         
         # 配置模型
         model = Prophet(

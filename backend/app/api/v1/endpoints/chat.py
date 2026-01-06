@@ -6,7 +6,13 @@ from app.models.chat import ChatRequest
 from app.core.utils import format_sse, df_to_table, df_to_chart, detect_anomalies, forecast_to_chart, STEPS
 from app.agents import FinanceChatAgent
 from app.data import DataFetcher
-from app.forecasting import TimeSeriesAnalyzer, ProphetForecaster, XGBoostForecaster
+from app.forecasting import (
+    TimeSeriesAnalyzer, 
+    ProphetForecaster, 
+    XGBoostForecaster,
+    RandomForestForecaster,
+    DLinearForecaster
+)
 
 router = APIRouter()
 
@@ -28,8 +34,8 @@ async def chat_stream(request: ChatRequest):
             model = request.model.lower() if request.model else "prophet"
             
             # 验证模型名称
-            if model not in ["prophet", "xgboost"]:
-                yield format_sse("error", {"message": f"不支持的模型: {model}。支持: 'prophet', 'xgboost'"})
+            if model not in ["prophet", "xgboost", "randomforest", "dlinear"]:
+                yield format_sse("error", {"message": f"不支持的模型: {model}。支持: 'prophet', 'xgboost', 'randomforest', 'dlinear'"})
                 return
             
             # 初始化步骤状态
@@ -107,9 +113,15 @@ async def chat_stream(request: ChatRequest):
             if model == "prophet":
                 prophet_forecaster = ProphetForecaster()
                 forecast_result = await asyncio.to_thread(prophet_forecaster.forecast, df, horizon)
-            else:  # xgboost
+            elif model == "xgboost":
                 xgboost_forecaster = XGBoostForecaster()
                 forecast_result = await asyncio.to_thread(xgboost_forecaster.forecast, df, horizon)
+            elif model == "randomforest":
+                rf_forecaster = RandomForestForecaster()
+                forecast_result = await asyncio.to_thread(rf_forecaster.forecast, df, horizon)
+            else:  # dlinear
+                dlinear_forecaster = DLinearForecaster()
+                forecast_result = await asyncio.to_thread(dlinear_forecaster.forecast, df, horizon)
             
             # 获取模型指标信息
             metrics_info = ", ".join([f"{k.upper()}: {v}" for k, v in forecast_result['metrics'].items()])

@@ -106,22 +106,22 @@ export function ChatArea() {
   const [messages, setMessages] = useState<Message[]>([])
   const [inputValue, setInputValue] = useState('')
   const [isLoading, setIsLoading] = useState(false)
-  const [selectedModel, setSelectedModel] = useState<'prophet' | 'xgboost'>('prophet')
+  const [selectedModel, setSelectedModel] = useState<'prophet' | 'xgboost' | 'randomforest' | 'dlinear'>('prophet')
 
   const handleSend = async () => {
     if (!inputValue.trim() || isLoading) return
-    
+
     const userMessage: Message = {
       id: Date.now().toString(),
       role: 'user',
       text: inputValue,
       timestamp: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
     }
-    
+
     setMessages((prev: Message[]) => [...prev, userMessage])
     setInputValue('')
     setIsLoading(true)
-    
+
     // 创建AI消息占位符
     const assistantMessageId = (Date.now() + 1).toString()
     const assistantMessage: Message = {
@@ -133,67 +133,67 @@ export function ChatArea() {
         status: 'pending' as const,
       })),
     }
-    
+
     setMessages((prev: Message[]) => [...prev, assistantMessage])
-    
+
     try {
       // 导入API函数（使用真实API）
       const { sendMessageStreamReal } = await import('@/lib/api/chat')
-      
+
       // 处理流式响应
       const contents: (TextContent | ChartContent | TableContent)[] = []
-      
+
       for await (const chunk of sendMessageStreamReal(inputValue, selectedModel, (steps: Step[]) => {
         // 更新步骤状态
-        setMessages((prev: Message[]) => prev.map((msg: Message) => 
-          msg.id === assistantMessageId 
+        setMessages((prev: Message[]) => prev.map((msg: Message) =>
+          msg.id === assistantMessageId
             ? { ...msg, steps }
             : msg
         ))
       })) {
         if (chunk.type === 'content') {
           contents.push(chunk.data)
-          
+
           // 更新消息内容，累积所有内容
-          setMessages((prev: Message[]) => prev.map((msg: Message) => 
-            msg.id === assistantMessageId 
-              ? { 
-                  ...msg, 
-                  contents: [...contents],
-                  // 如果所有步骤完成，清除steps
-                  steps: msg.steps?.every((s: Step) => s.status === 'completed') ? undefined : msg.steps
-                }
+          setMessages((prev: Message[]) => prev.map((msg: Message) =>
+            msg.id === assistantMessageId
+              ? {
+                ...msg,
+                contents: [...contents],
+                // 如果所有步骤完成，清除steps
+                steps: msg.steps?.every((s: Step) => s.status === 'completed') ? undefined : msg.steps
+              }
               : msg
           ))
         }
       }
-      
+
       // 所有内容接收完成，清除步骤显示
       if (contents.length > 0) {
-        setMessages((prev: Message[]) => prev.map((msg: Message) => 
-          msg.id === assistantMessageId 
-            ? { 
-                ...msg, 
-                contents: contents,
-                steps: undefined
-              }
+        setMessages((prev: Message[]) => prev.map((msg: Message) =>
+          msg.id === assistantMessageId
+            ? {
+              ...msg,
+              contents: contents,
+              steps: undefined
+            }
             : msg
         ))
       }
-      
+
     } catch (error) {
       console.error('发送消息失败:', error)
       // 更新消息显示错误
-      setMessages((prev: Message[]) => prev.map((msg: Message) => 
-        msg.id === assistantMessageId 
-          ? { 
-              ...msg, 
-              contents: [{ 
-                type: 'text', 
-                text: '抱歉，处理请求时出现错误，请稍后重试。' 
-              }],
-              steps: undefined
-            }
+      setMessages((prev: Message[]) => prev.map((msg: Message) =>
+        msg.id === assistantMessageId
+          ? {
+            ...msg,
+            contents: [{
+              type: 'text',
+              text: '抱歉，处理请求时出现错误，请稍后重试。'
+            }],
+            steps: undefined
+          }
           : msg
       ))
     } finally {
@@ -290,8 +290,8 @@ export function ChatArea() {
 
       {/* 快捷建议 - 只在有消息时显示 */}
       {!isEmpty && (
-        <QuickSuggestions 
-          suggestions={quickSuggestions} 
+        <QuickSuggestions
+          suggestions={quickSuggestions}
           onSelect={(suggestion) => setInputValue(suggestion)}
         />
       )}
@@ -325,14 +325,37 @@ export function ChatArea() {
               >
                 XGBoost
               </button>
+              <button
+                onClick={() => setSelectedModel('randomforest')}
+                className={cn(
+                  "px-3 py-1.5 text-xs font-medium rounded-md transition-all",
+                  selectedModel === 'randomforest'
+                    ? "bg-violet-600 text-white shadow-sm"
+                    : "text-gray-400 hover:text-gray-200"
+                )}
+              >
+                RandomForest
+              </button>
+              <button
+                onClick={() => setSelectedModel('dlinear')}
+                className={cn(
+                  "px-3 py-1.5 text-xs font-medium rounded-md transition-all",
+                  selectedModel === 'dlinear'
+                    ? "bg-violet-600 text-white shadow-sm"
+                    : "text-gray-400 hover:text-gray-200"
+                )}
+              >
+                DLinear
+              </button>
             </div>
             <span className="text-[10px] text-gray-600 ml-auto">
-              {selectedModel === 'prophet' 
-                ? '适合长期预测，自动处理季节性' 
-                : '适合中短期预测，捕捉非线性关系'}
+              {selectedModel === 'prophet' && '适合长期预测，自动处理季节性'}
+              {selectedModel === 'xgboost' && '适合中短期预测，捕捉非线性关系'}
+              {selectedModel === 'randomforest' && '集成学习，稳定性好，适合复杂模式'}
+              {selectedModel === 'dlinear' && '分解线性模型，轻量高效，趋势提取强'}
             </span>
           </div>
-          
+
           <div className="flex items-end gap-3">
             {/* 附件按钮 */}
             <button className="p-2.5 hover:bg-dark-600 rounded-xl transition-colors flex-shrink-0" title="上传文件">
@@ -354,7 +377,7 @@ export function ChatArea() {
             </div>
 
             {/* 发送按钮 */}
-            <button 
+            <button
               className="p-3 bg-gradient-to-r from-violet-600 to-purple-600 hover:from-violet-500 hover:to-purple-500 rounded-xl transition-all hover-lift flex-shrink-0 disabled:opacity-50"
               onClick={handleSend}
               disabled={!inputValue.trim() || isLoading}

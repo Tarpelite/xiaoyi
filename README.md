@@ -153,6 +153,8 @@ pnpm dev
 - `analyzer.py` - 时序特征分析与特征工程
 - `prophet_forecaster.py` - Prophet时序预测模型
 - `xgboost_forecaster.py` - XGBoost机器学习预测
+- `randomforest_forecaster.py` - RandomForest集成学习预测
+- `dlinear_forecaster.py` - DLinear分解线性预测
 
 #### 数据层 (`app/data/`)
 - `fetcher.py` - 从AKShare获取金融数据并标准化
