@@ -463,9 +463,9 @@ export function ChatArea() {
             </div>
 
             {/* 发送按钮 */}
-            <button
+             <button
               className="p-3 bg-gradient-to-r from-violet-600 to-purple-600 hover:from-violet-500 hover:to-purple-500 rounded-xl transition-all hover-lift flex-shrink-0 disabled:opacity-50"
-              onClick={handleSend}
+              onClick={() => handleSend()}  
               disabled={!inputValue.trim() || isLoading}
             >
               <Send className="w-5 h-5" />
