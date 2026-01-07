@@ -7,7 +7,7 @@ NLP Agent 模块
 
 import json
 from datetime import datetime, timedelta
-from typing import Dict, Any
+from typing import Dict, Any, List, Optional
 from openai import OpenAI
 
 
@@ -44,12 +44,13 @@ class NLPAgent:
             base_url="https://api.deepseek.com"
         )
     
-    def parse(self, user_query: str) -> Dict[str, Any]:
+    def parse(self, user_query: str, conversation_history: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
         """
         解析用户输入，返回数据配置和分析配置
         
         Args:
             user_query: 用户自然语言输入
+            conversation_history: 对话历史，格式: [{"role": "user", "content": "..."}, ...]
             
         Returns:
             包含 data_config 和 analysis_config 的字典
@@ -82,15 +83,33 @@ class NLPAgent:
 - 今天: {today.strftime('%Y-%m-%d')}
 - 一年前: {one_year_ago.strftime('%Y-%m-%d')}
 - model 字段固定返回 "prophet"（实际模型选择由外部参数控制）
+- **重要**：如果用户的问题涉及之前的对话（如"这个股票"、"刚才的分析"、"换个模型预测"），请从对话历史中提取：
+  - 股票代码（如历史中提到"茅台"，应提取为"600519"）
+  - 预测天数（如果历史中有提到，可以沿用或根据当前问题调整）
+  - 其他相关参数
+- 如果对话历史中提到了股票名称或代码，优先使用历史中的信息
 - 只返回 JSON
 """
         
+        # 构建消息列表
+        messages = [{"role": "system", "content": system_prompt}]
+        
+        # 如果有历史对话，添加到消息中（保留最近5轮）
+        if conversation_history:
+            # 只取最近的对话（避免token超限）
+            recent_history = conversation_history[-10:] if len(conversation_history) > 10 else conversation_history
+            for msg in recent_history:
+                messages.append({
+                    "role": msg["role"],
+                    "content": msg["content"]
+                })
+        
+        # 添加当前用户查询
+        messages.append({"role": "user", "content": user_query})
+        
         response = self.client.chat.completions.create(
             model="deepseek-chat",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_query}
-            ],
+            messages=messages,
             temperature=0.1,
             response_format={"type": "json_object"}
         )

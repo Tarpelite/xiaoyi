@@ -103,11 +103,47 @@ const quickSuggestions = [
   '生成一份投资分析报告',
 ]
 
+// 从 localStorage 获取或生成 session_id
+function getOrCreateSessionId(): string {
+  if (typeof window === 'undefined') return ''
+  
+  const stored = localStorage.getItem('chat_session_id')
+  if (stored) {
+    return stored
+  }
+  
+  // 生成新的 session_id
+  const newSessionId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+  localStorage.setItem('chat_session_id', newSessionId)
+  return newSessionId
+}
+
 export function ChatArea() {
   const [messages, setMessages] = useState<Message[]>([])
   const [inputValue, setInputValue] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [selectedModel, setSelectedModel] = useState<'prophet' | 'xgboost' | 'randomforest' | 'dlinear'>('prophet')
+  const [sessionId, setSessionId] = useState<string>(() => getOrCreateSessionId())
+
+  // 构建对话历史（从 messages 中提取）
+  const buildHistory = (): Array<{ role: string; content: string }> => {
+    const history: Array<{ role: string; content: string }> = []
+    
+    for (const msg of messages) {
+      if (msg.role === 'user' && msg.text) {
+        history.push({ role: 'user', content: msg.text })
+      } else if (msg.role === 'assistant' && msg.contents) {
+        // 提取助手回复的文本内容
+        const textContents = msg.contents.filter(c => c.type === 'text') as TextContent[]
+        if (textContents.length > 0) {
+          const combinedText = textContents.map(c => c.text).join('\n\n')
+          history.push({ role: 'assistant', content: combinedText })
+        }
+      }
+    }
+    
+    return history
+  }
 
   const handleSend = async () => {
     if (!inputValue.trim() || isLoading) return
@@ -141,29 +177,46 @@ export function ChatArea() {
       // 导入API函数（使用真实API）
       const { sendMessageStreamReal } = await import('@/lib/api/chat')
 
+      // 构建对话历史
+      const history = buildHistory()
+
       // 处理流式响应
       const contents: (TextContent | ChartContent | TableContent)[] = []
+      let currentSessionId = sessionId
 
-      for await (const chunk of sendMessageStreamReal(inputValue, selectedModel, (steps: Step[]) => {
-        // 更新步骤状态
-        setMessages((prev: Message[]) => prev.map((msg: Message) =>
-          msg.id === assistantMessageId
-            ? { ...msg, steps }
-            : msg
-        ))
-      })) {
-        if (chunk.type === 'content') {
+      for await (const chunk of sendMessageStreamReal(
+        inputValue, 
+        selectedModel, 
+        currentSessionId,
+        history,
+        (steps: Step[]) => {
+          // 更新步骤状态
+          setMessages((prev: Message[]) => prev.map((msg: Message) =>
+            msg.id === assistantMessageId
+              ? { ...msg, steps }
+              : msg
+          ))
+        }
+      )) {
+        if (chunk.type === 'session') {
+          // 接收后端返回的 session_id（新会话）
+          currentSessionId = chunk.data
+          setSessionId(currentSessionId)
+          if (typeof window !== 'undefined') {
+            localStorage.setItem('chat_session_id', currentSessionId)
+          }
+        } else if (chunk.type === 'content') {
           contents.push(chunk.data)
 
           // 更新消息内容，累积所有内容
           setMessages((prev: Message[]) => prev.map((msg: Message) =>
             msg.id === assistantMessageId
               ? {
-                ...msg,
-                contents: [...contents],
-                // 如果所有步骤完成，清除steps
-                steps: msg.steps?.every((s: Step) => s.status === 'completed') ? undefined : msg.steps
-              }
+                  ...msg,
+                  contents: [...contents],
+                  // 如果所有步骤完成，清除steps
+                  steps: msg.steps?.every((s: Step) => s.status === 'completed') ? undefined : msg.steps
+                }
               : msg
           ))
         }

@@ -243,14 +243,21 @@ async function generateResponseContent(message: string): Promise<(TextContent | 
 export async function* sendMessageStreamReal(
   message: string,
   model: string = 'prophet',
+  sessionId?: string | null,
+  history?: Array<{ role: string; content: string }>,
   onStepUpdate?: (steps: Step[]) => void
-): AsyncGenerator<{ type: 'step' | 'content'; data: any }, void, unknown> {
+): AsyncGenerator<{ type: 'step' | 'content' | 'session'; data: any }, void, unknown> {
   const response = await fetch(`${API_BASE_URL}/api/chat/stream`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ message, model }),
+    body: JSON.stringify({ 
+      message, 
+      model,
+      session_id: sessionId || null,
+      history: history || null
+    }),
   })
 
   if (!response.ok) {
@@ -289,6 +296,9 @@ export async function* sendMessageStreamReal(
           } else if (data.type === 'content') {
             // 后端会先发送时序数据，然后发送步骤更新，最后发送分析结果
             yield { type: 'content', data: data.content }
+          } else if (data.type === 'session') {
+            // 接收后端返回的 session_id
+            yield { type: 'session', data: data.session_id }
           } else if (data.type === 'error') {
             // 处理错误
             throw new Error(data.message || 'Unknown error')
