@@ -1,7 +1,6 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { useState } from 'react'
 import Image from 'next/image'
 import { Download, Share2, MoreVertical, Paperclip, Send, Zap } from 'lucide-react'
 import { MessageBubble } from './MessageBubble'
