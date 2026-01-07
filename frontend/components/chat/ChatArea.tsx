@@ -84,15 +84,15 @@ export interface Message {
   }
 }
 
-// 预测步骤定义（7个步骤）
+// 预测步骤定义（7个步骤）- 与后端 STEPS 保持一致
 export const PREDICTION_STEPS: Omit<Step, 'status' | 'message'>[] = [
   { id: '1', name: '数据获取与预处理' },
-  { id: '2', name: '时序特征分析' },
-  { id: '3', name: '异常检测' },
-  { id: '4', name: '模型训练与评估' },
-  { id: '5', name: '预测生成' },
+  { id: '2', name: '新闻获取与情绪分析' },
+  { id: '3', name: '时序特征分析' },
+  { id: '4', name: '参数智能推荐' },
+  { id: '5', name: '模型训练与预测' },
   { id: '6', name: '结果可视化' },
-  { id: '7', name: '分析完成' },
+  { id: '7', name: '报告生成' },
 ]
 
 // 默认快速追问建议

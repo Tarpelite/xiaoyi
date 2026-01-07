@@ -32,6 +32,7 @@ class DataFetcher:
             "stock_zh_a_hist": ak.stock_zh_a_hist,
             "stock_zh_index_daily_em": ak.stock_zh_index_daily_em,
             "fund_etf_hist_em": ak.fund_etf_hist_em,
+            "stock_news_em": ak.stock_news_em,
         }
         
         func_name = config["api_function"]
@@ -82,6 +83,29 @@ class DataFetcher:
             "ds": pd.to_datetime(df[date_col]),
             "y": df[value_col].astype(float)
         }).sort_values("ds").drop_duplicates("ds").reset_index(drop=True)
-        
+
         print(f"✅ 数据准备: {len(result)} 条, {result['ds'].min().date()} ~ {result['ds'].max().date()}")
         return result
+
+    @staticmethod
+    def fetch_news(symbol: str, limit: int = 50) -> pd.DataFrame:
+        """
+        获取个股新闻数据
+
+        Args:
+            symbol: 股票代码，如 "600519"
+            limit: 返回新闻条数限制
+
+        Returns:
+            新闻 DataFrame，包含标题、内容、时间等
+        """
+        import akshare as ak
+
+        try:
+            df = ak.stock_news_em(symbol=symbol)
+            result = df.head(limit) if len(df) > limit else df
+            print(f"✅ 获取新闻: {len(result)} 条")
+            return result
+        except Exception as e:
+            print(f"⚠️ 获取新闻失败: {e}")
+            return pd.DataFrame()

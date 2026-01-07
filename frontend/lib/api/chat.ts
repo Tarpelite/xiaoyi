@@ -159,14 +159,14 @@ export async function* sendMessageStream(
   }
 }
 
-// 获取步骤完成消息
+// 获取步骤完成消息 - 与后端 STEPS 保持一致
 function getStepMessage(stepIndex: number): string {
   const messages = [
-    '已获取历史数据 365 天',
-    '趋势强度: 0.78, 季节性: 0.32',
-    '检测到 2 个异常波动点',
-    'AutoARIMA 模型最优 (MASE: 0.82)',
-    '生成未来 90 天预测',
+    '已获取历史数据',
+    '情绪分析完成',
+    '时序特征分析完成',
+    '参数推荐已生成',
+    '模型预测完成',
     '图表已生成',
     '分析报告已生成',
   ]
