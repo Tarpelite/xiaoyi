@@ -1,0 +1,55 @@
+# Git
+.git
+.gitignore
+.gitmodules
+
+# Node
+**/node_modules
+**/.next
+**/dist
+**/.turbo
+
+# Python
+**/__pycache__
+**/*.pyc
+**/.venv
+**/venv
+**/.pytest_cache
+**/*.egg-info
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# 环境变量（不要打包到镜像）
+.env
+.env.local
+.env.*.local
+backend/.env
+
+# 测试和文档
+**/tests
+**/*.md
+!README.md
+
+# 开发容器
+.devcontainer
+
+# Notebooks（生产环境不需要）
+notebooks/
+
+# 其他
+*.log
+.DS_Store
+Thumbs.db
+
+# Jupyter
+**/.ipynb_checkpoints
+
+# timecopilot 库的测试和文档（减小镜像体积）
+backend/app/libs/timecopilot/tests
+backend/app/libs/timecopilot/docs
+backend/app/libs/timecopilot/experiments
+backend/app/libs/timecopilot/.github
