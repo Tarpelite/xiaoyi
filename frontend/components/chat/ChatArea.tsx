@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Download, Share2, MoreVertical, Paperclip, Send, Zap } from 'lucide-react'
 import { MessageBubble } from './MessageBubble'
 import { QuickSuggestions } from './QuickSuggestions'
@@ -94,8 +94,8 @@ export const PREDICTION_STEPS: Omit<Step, 'status' | 'message'>[] = [
   { id: '7', name: '分析完成' },
 ]
 
-// 引导性问题建议
-const quickSuggestions = [
+// 默认快速追问建议
+const defaultQuickSuggestions = [
   '帮我分析一下茅台，预测下个季度走势',
   '查看最近的市场趋势',
   '对比几只白酒股的表现',
@@ -123,6 +123,7 @@ export function ChatArea() {
   const [isLoading, setIsLoading] = useState(false)
   const [selectedModel, setSelectedModel] = useState<'prophet' | 'xgboost' | 'randomforest' | 'dlinear'>('prophet')
   const [sessionId, setSessionId] = useState<string>(() => getOrCreateSessionId())
+  const [quickSuggestions, setQuickSuggestions] = useState<string[]>(defaultQuickSuggestions)
 
   // 构建对话历史（从 messages 中提取）
   const buildHistory = (): Array<{ role: string; content: string }> => {
@@ -144,13 +145,38 @@ export function ChatArea() {
     return history
   }
 
-  const handleSend = async () => {
-    if (!inputValue.trim() || isLoading) return
+  // 更新快速追问建议（在对话完成后）
+  useEffect(() => {
+    const updateSuggestions = async () => {
+      // 只有在有消息、不在加载中、且有sessionId时才更新
+      if (messages.length > 0 && !isLoading && sessionId) {
+        try {
+          const { getSuggestions } = await import('@/lib/api/chat')
+          const suggestions = await getSuggestions(sessionId)
+          if (suggestions && suggestions.length > 0) {
+            setQuickSuggestions(suggestions)
+          }
+        } catch (error) {
+          console.error('更新快速追问建议失败:', error)
+        }
+      }
+    }
+
+    // 延迟更新，确保消息已完全处理（等待加载完成）
+    if (!isLoading) {
+      const timer = setTimeout(updateSuggestions, 800)
+      return () => clearTimeout(timer)
+    }
+  }, [messages.length, isLoading, sessionId])
+
+  const handleSend = async (messageOverride?: string) => {
+    const messageToSend = messageOverride || inputValue
+    if (!messageToSend.trim() || isLoading) return
 
     const userMessage: Message = {
       id: Date.now().toString(),
       role: 'user',
-      text: inputValue,
+      text: messageToSend,
       timestamp: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
     }
 
@@ -184,7 +210,7 @@ export function ChatArea() {
       let currentSessionId = sessionId
 
       for await (const chunk of sendMessageStreamReal(
-        inputValue, 
+        messageToSend, 
         selectedModel, 
         currentSessionId,
         history,
@@ -310,12 +336,8 @@ export function ChatArea() {
                   <button
                     key={index}
                     onClick={() => {
-                      setInputValue(suggestion)
-                      // 自动聚焦到输入框
-                      setTimeout(() => {
-                        const textarea = document.querySelector('textarea')
-                        textarea?.focus()
-                      }, 100)
+                      // 直接发送快速追问
+                      handleSend(suggestion)
                     }}
                     className="px-4 py-3 bg-dark-600/50 hover:bg-dark-500/50 border border-white/5 hover:border-violet-500/30 rounded-xl text-left text-sm text-gray-300 hover:text-gray-100 transition-all"
                   >
@@ -345,7 +367,10 @@ export function ChatArea() {
       {!isEmpty && (
         <QuickSuggestions
           suggestions={quickSuggestions}
-          onSelect={(suggestion) => setInputValue(suggestion)}
+          onSelect={(suggestion) => {
+            // 直接发送快速追问
+            handleSend(suggestion)
+          }}
         />
       )}
 

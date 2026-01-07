@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from app.core.config import settings
 from app.core.utils import format_sse, df_to_table, df_to_chart, detect_anomalies, forecast_to_chart, STEPS
 from app.core.session_manager import get_session_manager
-from app.agents import FinanceChatAgent, IntentAgent
+from app.agents import FinanceChatAgent, IntentAgent, SuggestionAgent
 from app.data import DataFetcher
 from app.models import (
     TimeSeriesAnalyzer, 
@@ -25,6 +25,11 @@ class ChatRequest(BaseModel):
     model: str = "prophet"  # 预测模型：prophet, xgboost, randomforest, dlinear
     session_id: Optional[str] = None  # 会话ID，可选
     history: Optional[List[Dict[str, str]]] = None  # 对话历史，可选（用于兼容）
+
+
+class SuggestionsRequest(BaseModel):
+    """快速追问建议请求模型"""
+    session_id: Optional[str] = None  # 会话ID，可选
 
 @router.post("/stream")
 async def chat_stream(request: ChatRequest):
@@ -273,3 +278,34 @@ async def chat_stream(request: ChatRequest):
             "X-Accel-Buffering": "no"
         }
     )
+
+
+@router.post("/suggestions")
+async def get_suggestions(request: SuggestionsRequest):
+    """获取快速追问建议"""
+    try:
+        api_key = settings.api_key
+    except ValueError as e:
+        return {"error": str(e), "suggestions": []}
+    
+    session_manager = get_session_manager()
+    session_id = request.session_id
+    
+    # 如果没有提供 session_id，返回默认建议
+    if not session_id:
+        default_suggestions = [
+            "帮我分析一下茅台，预测下个季度走势",
+            "查看最近的市场趋势",
+            "对比几只白酒股的表现",
+            "生成一份投资分析报告"
+        ]
+        return {"suggestions": default_suggestions}
+    
+    # 获取对话历史
+    conversation_history = session_manager.get_recent_history(session_id, max_turns=5)
+    
+    # 生成建议
+    suggestion_agent = SuggestionAgent(api_key)
+    suggestions = await asyncio.to_thread(suggestion_agent.generate_suggestions, conversation_history)
+    
+    return {"suggestions": suggestions}
