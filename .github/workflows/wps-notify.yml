@@ -1,0 +1,36 @@
+name: WPS Notification
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    types: [closed]
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || github.event.pull_request.merged == true
+    
+    steps:
+      - name: Send WPS Notification
+        run: |
+          if [ "${{ github.event_name }}" == "push" ]; then
+            EVENT_TYPE="Push"
+            BRANCH="${{ github.ref_name }}"
+            AUTHOR="${{ github.actor }}"
+            MESSAGE="${{ github.event.head_commit.message }}"
+            COMMIT_URL="${{ github.event.head_commit.url }}"
+            
+            CONTENT="## 📦 代码推送通知\n\n**分支**: ${BRANCH}\n**提交者**: ${AUTHOR}\n**提交信息**: ${MESSAGE}\n\n[查看提交](${COMMIT_URL})"
+          else
+            EVENT_TYPE="Merge"
+            PR_TITLE="${{ github.event.pull_request.title }}"
+            PR_AUTHOR="${{ github.event.pull_request.user.login }}"
+            PR_URL="${{ github.event.pull_request.html_url }}"
+            
+            CONTENT="## 🔀 PR合并通知\n\n**标题**: ${PR_TITLE}\n**作者**: ${PR_AUTHOR}\n\n[查看PR](${PR_URL})"
+          fi
+          
+          curl -X POST "${{ secrets.WPS_WEBHOOK}}" \
+            -H "Content-Type: application/json" \
+            -d "{\"msgtype\":\"markdown\",\"markdown\":{\"text\":\"${CONTENT}\"}}"

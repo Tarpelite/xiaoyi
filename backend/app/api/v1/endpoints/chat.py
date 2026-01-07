@@ -1,15 +1,31 @@
 import asyncio
+from typing import Optional, List, Dict
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 from app.core.config import settings
-from app.models.chat import ChatRequest
-from app.core.utils import format_sse, df_to_table, df_to_chart, forecast_to_chart, STEPS
-from app.agents import FinanceChatAgent
+from app.core.utils import format_sse, df_to_table, df_to_chart, detect_anomalies, forecast_to_chart, STEPS
+from app.core.session_manager import get_session_manager
+from app.agents import FinanceChatAgent, IntentAgent
 from app.data import DataFetcher
-from app.forecasting import TimeSeriesAnalyzer, ProphetForecaster, XGBoostForecaster
+from app.models import (
+    TimeSeriesAnalyzer,
+    ProphetForecaster,
+    XGBoostForecaster,
+    RandomForestForecaster,
+    DLinearForecaster
+)
 from app.sentiment import SentimentAnalyzer
 
 router = APIRouter()
+
+
+class ChatRequest(BaseModel):
+    """聊天请求模型"""
+    message: str
+    model: str = "prophet"  # 预测模型：prophet, xgboost, randomforest, dlinear
+    session_id: Optional[str] = None  # 会话ID，可选
+    history: Optional[List[Dict[str, str]]] = None  # 对话历史，可选（用于兼容）
 
 @router.post("/stream")
 async def chat_stream(request: ChatRequest):
@@ -30,9 +46,48 @@ async def chat_stream(request: ChatRequest):
             model = request.model.lower() if request.model else "prophet"
 
             # 验证模型名称
-            if model not in ["prophet", "xgboost"]:
-                yield format_sse("error", {"message": f"不支持的模型: {model}。支持: 'prophet', 'xgboost'"})
+            if model not in ["prophet", "xgboost", "randomforest", "dlinear"]:
+                yield format_sse("error", {"message": f"不支持的模型: {model}。支持: 'prophet', 'xgboost', 'randomforest', 'dlinear'"})
                 return
+
+            # 会话管理
+            session_manager = get_session_manager()
+            session_id = request.session_id
+
+            # 如果没有提供 session_id，创建新会话
+            if not session_id:
+                session_id = session_manager.create_session()
+                # 发送 session_id 给前端
+                yield format_sse("session", {"session_id": session_id})
+
+            # 获取对话历史（用于上下文）
+            conversation_history = session_manager.get_recent_history(session_id, max_turns=5)
+
+            # 添加用户消息到历史（在处理前添加，以便后续更新）
+            session_manager.add_message(session_id, "user", user_input)
+
+            # ========== 意图判断 ==========
+            intent_agent = IntentAgent(api_key)
+            intent_result = await asyncio.to_thread(intent_agent.judge_intent, user_input, conversation_history)
+            intent = intent_result.get("intent", "analyze")
+
+            # 如果只是提问，直接回答
+            if intent == "answer":
+                # 直接回答问题，不执行完整分析
+                answer = await asyncio.to_thread(intent_agent.answer_question, user_input, conversation_history)
+
+                # 发送回答
+                text_content = {
+                    "type": "text",
+                    "text": answer
+                }
+                yield format_sse("content", {"content": text_content})
+
+                # 添加助手回复到会话历史
+                session_manager.add_message(session_id, "assistant", answer)
+                return
+
+            # 如果需要执行新分析，继续执行完整流程
 
             # 初始化步骤状态
             steps = [{"id": s["id"], "name": s["name"], "status": "pending"} for s in STEPS]
@@ -43,12 +98,24 @@ async def chat_stream(request: ChatRequest):
             yield format_sse("step", {"steps": steps})
             await asyncio.sleep(0.1)
 
-            # NLP 解析
-            parsed = await asyncio.to_thread(agent.nlp.parse, user_input)
+            # NLP 解析（传递历史对话）
+            parsed = await asyncio.to_thread(agent.nlp.parse, user_input, conversation_history)
             data_config = parsed["data_config"]
             analysis_config = parsed["analysis_config"]
 
-            steps[0]["message"] = "获取股价数据中..."
+            # 检查用户问题中是否指定了模型（如"换个XGBoost模型"）
+            user_input_lower = user_input.lower()
+            if "xgboost" in user_input_lower or "xgb" in user_input_lower:
+                model = "xgboost"
+            elif "randomforest" in user_input_lower or "随机森林" in user_input or "rf" in user_input_lower:
+                model = "randomforest"
+            elif "dlinear" in user_input_lower or "d-linear" in user_input_lower:
+                model = "dlinear"
+            elif "prophet" in user_input_lower:
+                model = "prophet"
+            # 否则使用前端传递的 model 参数
+
+            steps[0]["message"] = "获取数据中..."
             yield format_sse("step", {"steps": steps})
             await asyncio.sleep(0.1)
 
@@ -171,9 +238,15 @@ async def chat_stream(request: ChatRequest):
                 forecast_result = await asyncio.to_thread(
                     prophet_forecaster.forecast, df, horizon, prophet_params
                 )
-            else:  # xgboost
+            elif model == "xgboost":
                 xgboost_forecaster = XGBoostForecaster()
                 forecast_result = await asyncio.to_thread(xgboost_forecaster.forecast, df, horizon)
+            elif model == "randomforest":
+                rf_forecaster = RandomForestForecaster()
+                forecast_result = await asyncio.to_thread(rf_forecaster.forecast, df, horizon)
+            else:  # dlinear
+                dlinear_forecaster = DLinearForecaster()
+                forecast_result = await asyncio.to_thread(dlinear_forecaster.forecast, df, horizon)
 
             # 获取模型指标信息
             metrics_info = ", ".join([f"{k.upper()}: {v}" for k, v in forecast_result['metrics'].items()])
@@ -216,10 +289,10 @@ async def chat_stream(request: ChatRequest):
             yield format_sse("step", {"steps": steps})
             await asyncio.sleep(0.1)
 
-            # 生成报告（包含情绪分析）
+            # 生成报告（包含情绪分析和对话历史）
             user_question = analysis_config.get("user_question", user_input)
             report = await asyncio.to_thread(
-                agent.reporter.generate, user_question, features, forecast_result, sentiment_result
+                agent.reporter.generate, user_question, features, forecast_result, sentiment_result, conversation_history
             )
 
             # 发送文本内容（分析报告）
@@ -233,6 +306,9 @@ async def chat_stream(request: ChatRequest):
             steps[6]["status"] = "completed"
             steps[6]["message"] = "分析报告已生成"
             yield format_sse("step", {"steps": steps})
+
+            # 添加助手回复到会话历史
+            session_manager.add_message(session_id, "assistant", report)
 
         except Exception as e:
             # 错误处理

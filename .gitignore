@@ -41,3 +41,9 @@ coverage/
 *.pem
 .vercel
 .turbo
+/PR_DESCRIPTION.md
+/REFACTORING_SUMMARY.md
+
+# Data files
+energy_reports/
+energy.zip

@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import Image from 'next/image'
 import { Download, Share2, MoreVertical, Paperclip, Send, Zap } from 'lucide-react'
 import { MessageBubble } from './MessageBubble'
 import { QuickSuggestions } from './QuickSuggestions'
@@ -83,15 +84,15 @@ export interface Message {
   }
 }
 
-// 预测步骤定义（7个步骤）
+// 预测步骤定义（7个步骤）- 与后端 STEPS 保持一致
 export const PREDICTION_STEPS: Omit<Step, 'status' | 'message'>[] = [
   { id: '1', name: '数据获取与预处理' },
-  { id: '2', name: '时序特征分析' },
-  { id: '3', name: '异常检测' },
-  { id: '4', name: '模型训练与评估' },
-  { id: '5', name: '预测生成' },
+  { id: '2', name: '新闻获取与情绪分析' },
+  { id: '3', name: '时序特征分析' },
+  { id: '4', name: '参数智能推荐' },
+  { id: '5', name: '模型训练与预测' },
   { id: '6', name: '结果可视化' },
-  { id: '7', name: '分析完成' },
+  { id: '7', name: '报告生成' },
 ]
 
 // 引导性问题建议
@@ -102,26 +103,62 @@ const quickSuggestions = [
   '生成一份投资分析报告',
 ]
 
+// 从 localStorage 获取或生成 session_id
+function getOrCreateSessionId(): string {
+  if (typeof window === 'undefined') return ''
+  
+  const stored = localStorage.getItem('chat_session_id')
+  if (stored) {
+    return stored
+  }
+  
+  // 生成新的 session_id
+  const newSessionId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+  localStorage.setItem('chat_session_id', newSessionId)
+  return newSessionId
+}
+
 export function ChatArea() {
   const [messages, setMessages] = useState<Message[]>([])
   const [inputValue, setInputValue] = useState('')
   const [isLoading, setIsLoading] = useState(false)
-  const [selectedModel, setSelectedModel] = useState<'prophet' | 'xgboost'>('prophet')
+  const [selectedModel, setSelectedModel] = useState<'prophet' | 'xgboost' | 'randomforest' | 'dlinear'>('prophet')
+  const [sessionId, setSessionId] = useState<string>(() => getOrCreateSessionId())
+
+  // 构建对话历史（从 messages 中提取）
+  const buildHistory = (): Array<{ role: string; content: string }> => {
+    const history: Array<{ role: string; content: string }> = []
+    
+    for (const msg of messages) {
+      if (msg.role === 'user' && msg.text) {
+        history.push({ role: 'user', content: msg.text })
+      } else if (msg.role === 'assistant' && msg.contents) {
+        // 提取助手回复的文本内容
+        const textContents = msg.contents.filter(c => c.type === 'text') as TextContent[]
+        if (textContents.length > 0) {
+          const combinedText = textContents.map(c => c.text).join('\n\n')
+          history.push({ role: 'assistant', content: combinedText })
+        }
+      }
+    }
+    
+    return history
+  }
 
   const handleSend = async () => {
     if (!inputValue.trim() || isLoading) return
-    
+
     const userMessage: Message = {
       id: Date.now().toString(),
       role: 'user',
       text: inputValue,
       timestamp: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
     }
-    
+
     setMessages((prev: Message[]) => [...prev, userMessage])
     setInputValue('')
     setIsLoading(true)
-    
+
     // 创建AI消息占位符
     const assistantMessageId = (Date.now() + 1).toString()
     const assistantMessage: Message = {
@@ -133,32 +170,49 @@ export function ChatArea() {
         status: 'pending' as const,
       })),
     }
-    
+
     setMessages((prev: Message[]) => [...prev, assistantMessage])
-    
+
     try {
       // 导入API函数（使用真实API）
       const { sendMessageStreamReal } = await import('@/lib/api/chat')
-      
+
+      // 构建对话历史
+      const history = buildHistory()
+
       // 处理流式响应
       const contents: (TextContent | ChartContent | TableContent)[] = []
-      
-      for await (const chunk of sendMessageStreamReal(inputValue, selectedModel, (steps: Step[]) => {
-        // 更新步骤状态
-        setMessages((prev: Message[]) => prev.map((msg: Message) => 
-          msg.id === assistantMessageId 
-            ? { ...msg, steps }
-            : msg
-        ))
-      })) {
-        if (chunk.type === 'content') {
+      let currentSessionId = sessionId
+
+      for await (const chunk of sendMessageStreamReal(
+        inputValue, 
+        selectedModel, 
+        currentSessionId,
+        history,
+        (steps: Step[]) => {
+          // 更新步骤状态
+          setMessages((prev: Message[]) => prev.map((msg: Message) =>
+            msg.id === assistantMessageId
+              ? { ...msg, steps }
+              : msg
+          ))
+        }
+      )) {
+        if (chunk.type === 'session') {
+          // 接收后端返回的 session_id（新会话）
+          currentSessionId = chunk.data
+          setSessionId(currentSessionId)
+          if (typeof window !== 'undefined') {
+            localStorage.setItem('chat_session_id', currentSessionId)
+          }
+        } else if (chunk.type === 'content') {
           contents.push(chunk.data)
-          
+
           // 更新消息内容，累积所有内容
-          setMessages((prev: Message[]) => prev.map((msg: Message) => 
-            msg.id === assistantMessageId 
-              ? { 
-                  ...msg, 
+          setMessages((prev: Message[]) => prev.map((msg: Message) =>
+            msg.id === assistantMessageId
+              ? {
+                  ...msg,
                   contents: [...contents],
                   // 如果所有步骤完成，清除steps
                   steps: msg.steps?.every((s: Step) => s.status === 'completed') ? undefined : msg.steps
@@ -167,33 +221,33 @@ export function ChatArea() {
           ))
         }
       }
-      
+
       // 所有内容接收完成，清除步骤显示
       if (contents.length > 0) {
-        setMessages((prev: Message[]) => prev.map((msg: Message) => 
-          msg.id === assistantMessageId 
-            ? { 
-                ...msg, 
-                contents: contents,
-                steps: undefined
-              }
+        setMessages((prev: Message[]) => prev.map((msg: Message) =>
+          msg.id === assistantMessageId
+            ? {
+              ...msg,
+              contents: contents,
+              steps: undefined
+            }
             : msg
         ))
       }
-      
+
     } catch (error) {
       console.error('发送消息失败:', error)
       // 更新消息显示错误
-      setMessages((prev: Message[]) => prev.map((msg: Message) => 
-        msg.id === assistantMessageId 
-          ? { 
-              ...msg, 
-              contents: [{ 
-                type: 'text', 
-                text: '抱歉，处理请求时出现错误，请稍后重试。' 
-              }],
-              steps: undefined
-            }
+      setMessages((prev: Message[]) => prev.map((msg: Message) =>
+        msg.id === assistantMessageId
+          ? {
+            ...msg,
+            contents: [{
+              type: 'text',
+              text: '抱歉，处理请求时出现错误，请稍后重试。'
+            }],
+            steps: undefined
+          }
           : msg
       ))
     } finally {
@@ -214,6 +268,13 @@ export function ChatArea() {
       {/* 顶部栏 */}
       <header className="h-14 border-b border-white/5 flex items-center justify-between px-6 bg-dark-800/30">
         <div className="flex items-center gap-4">
+          <Image
+            src="/logo.svg"
+            alt="Logo"
+            width={28}
+            height={28}
+            className="flex-shrink-0"
+          />
           <h2 className="text-base font-semibold">
             {isEmpty ? '股票分析助手' : '股票分析'}
           </h2>
@@ -290,8 +351,8 @@ export function ChatArea() {
 
       {/* 快捷建议 - 只在有消息时显示 */}
       {!isEmpty && (
-        <QuickSuggestions 
-          suggestions={quickSuggestions} 
+        <QuickSuggestions
+          suggestions={quickSuggestions}
           onSelect={(suggestion) => setInputValue(suggestion)}
         />
       )}
@@ -325,14 +386,37 @@ export function ChatArea() {
               >
                 XGBoost
               </button>
+              <button
+                onClick={() => setSelectedModel('randomforest')}
+                className={cn(
+                  "px-3 py-1.5 text-xs font-medium rounded-md transition-all",
+                  selectedModel === 'randomforest'
+                    ? "bg-violet-600 text-white shadow-sm"
+                    : "text-gray-400 hover:text-gray-200"
+                )}
+              >
+                RandomForest
+              </button>
+              <button
+                onClick={() => setSelectedModel('dlinear')}
+                className={cn(
+                  "px-3 py-1.5 text-xs font-medium rounded-md transition-all",
+                  selectedModel === 'dlinear'
+                    ? "bg-violet-600 text-white shadow-sm"
+                    : "text-gray-400 hover:text-gray-200"
+                )}
+              >
+                DLinear
+              </button>
             </div>
             <span className="text-[10px] text-gray-600 ml-auto">
-              {selectedModel === 'prophet' 
-                ? '适合长期预测，自动处理季节性' 
-                : '适合中短期预测，捕捉非线性关系'}
+              {selectedModel === 'prophet' && '适合长期预测，自动处理季节性'}
+              {selectedModel === 'xgboost' && '适合中短期预测，捕捉非线性关系'}
+              {selectedModel === 'randomforest' && '集成学习，稳定性好，适合复杂模式'}
+              {selectedModel === 'dlinear' && '分解线性模型，轻量高效，趋势提取强'}
             </span>
           </div>
-          
+
           <div className="flex items-end gap-3">
             {/* 附件按钮 */}
             <button className="p-2.5 hover:bg-dark-600 rounded-xl transition-colors flex-shrink-0" title="上传文件">
@@ -354,7 +438,7 @@ export function ChatArea() {
             </div>
 
             {/* 发送按钮 */}
-            <button 
+            <button
               className="p-3 bg-gradient-to-r from-violet-600 to-purple-600 hover:from-violet-500 hover:to-purple-500 rounded-xl transition-all hover-lift flex-shrink-0 disabled:opacity-50"
               onClick={handleSend}
               disabled={!inputValue.trim() || isLoading}
