@@ -4,6 +4,20 @@ import { PREDICTION_STEPS } from '@/components/chat/ChatArea'
 // API 基础URL（假设FastAPI后端运行在本地）
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
+// Tool 开关设置接口
+export interface ToolSettings {
+  forecast: boolean      // 序列预测（默认 true）
+  reportRag: boolean     // 研报检索（默认 false）
+  newsRag: boolean       // 新闻 RAG（默认 false）
+}
+
+// 默认 Tool 设置
+export const DEFAULT_TOOL_SETTINGS: ToolSettings = {
+  forecast: true,
+  reportRag: false,
+  newsRag: false
+}
+
 // 获取快速追问建议
 export async function getSuggestions(sessionId?: string | null): Promise<string[]> {
   try {
@@ -276,18 +290,27 @@ export async function* sendMessageStreamReal(
   model: string = 'prophet',
   sessionId?: string | null,
   history?: Array<{ role: string; content: string }>,
-  onStepUpdate?: (steps: Step[]) => void
-): AsyncGenerator<{ type: 'step' | 'content' | 'session'; data: any }, void, unknown> {
+  onStepUpdate?: (steps: Step[]) => void,
+  tools?: ToolSettings
+): AsyncGenerator<{ type: 'step' | 'content' | 'session' | 'text_delta' | 'text_done' | 'intent'; data: any }, void, unknown> {
+  // 转换前端 camelCase 到后端 snake_case
+  const toolsPayload = tools ? {
+    forecast: tools.forecast,
+    report_rag: tools.reportRag,
+    news_rag: tools.newsRag
+  } : undefined
+
   const response = await fetch(`${API_BASE_URL}/api/chat/stream`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ 
-      message, 
+    body: JSON.stringify({
+      message,
       model,
       session_id: sessionId || null,
-      history: history || null
+      history: history || null,
+      tools: toolsPayload
     }),
   })
 
@@ -330,6 +353,15 @@ export async function* sendMessageStreamReal(
           } else if (data.type === 'session') {
             // 接收后端返回的 session_id
             yield { type: 'session', data: data.session_id }
+          } else if (data.type === 'text_delta') {
+            // 流式文本片段
+            yield { type: 'text_delta', data: data.delta }
+          } else if (data.type === 'text_done') {
+            // 流式文本完成
+            yield { type: 'text_done', data: data.text }
+          } else if (data.type === 'intent') {
+            // 意图识别结果
+            yield { type: 'intent', data: { intent: data.intent, reason: data.reason } }
           } else if (data.type === 'error') {
             // 处理错误
             throw new Error(data.message || 'Unknown error')
