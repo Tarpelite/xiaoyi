@@ -1,12 +1,12 @@
 import asyncio
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 from app.core.config import settings
-from app.models.chat import ChatRequest
 from app.core.utils import format_sse, df_to_table, df_to_chart, detect_anomalies, forecast_to_chart, STEPS
 from app.agents import FinanceChatAgent
 from app.data import DataFetcher
-from app.forecasting import (
+from app.models import (
     TimeSeriesAnalyzer, 
     ProphetForecaster, 
     XGBoostForecaster,
@@ -15,6 +15,12 @@ from app.forecasting import (
 )
 
 router = APIRouter()
+
+
+class ChatRequest(BaseModel):
+    """聊天请求模型"""
+    message: str
+    model: str = "prophet"  # 预测模型：prophet, xgboost, randomforest, dlinear
 
 @router.post("/stream")
 async def chat_stream(request: ChatRequest):

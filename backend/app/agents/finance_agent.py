@@ -10,7 +10,7 @@ from typing import Dict, Any
 from .nlp_agent import NLPAgent
 from .report_agent import ReportAgent
 from app.data import DataFetcher
-from app.forecasting import TimeSeriesAnalyzer, ProphetForecaster, XGBoostForecaster, DLinearForecaster, \
+from app.models import TimeSeriesAnalyzer, ProphetForecaster, XGBoostForecaster, DLinearForecaster, \
     RandomForestForecaster
 
 

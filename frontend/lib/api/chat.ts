@@ -10,7 +10,7 @@ function generateTimeSeriesData(): { table: TableContent; chart: ChartContent } 
   const dates: string[] = []
   const prices: number[] = []
   const volumes: number[] = []
-  
+
   // 生成过去365天的数据
   for (let i = 365; i > 0; i--) {
     const date = new Date(now)
@@ -23,12 +23,12 @@ function generateTimeSeriesData(): { table: TableContent; chart: ChartContent } 
     // 模拟成交量
     volumes.push(Math.floor(1000000 + Math.random() * 500000))
   }
-  
+
   // 生成表格数据（最近20条）
   const recent20Dates = dates.slice(-20)
   const recent20Prices = prices.slice(-20)
   const recent20Volumes = volumes.slice(-20)
-  
+
   const tableData: TableContent = {
     type: 'table',
     title: '历史时序数据（最近20条）',
@@ -39,7 +39,7 @@ function generateTimeSeriesData(): { table: TableContent; chart: ChartContent } 
       recent20Volumes[index].toLocaleString(),
     ]),
   }
-  
+
   // 生成图表数据（完整365天）
   // 为了性能，图表数据可以采样（每5天一个点）
   const sampledDates: string[] = []
@@ -48,7 +48,7 @@ function generateTimeSeriesData(): { table: TableContent; chart: ChartContent } 
     sampledDates.push(dates[i])
     sampledPrices.push(prices[i])
   }
-  
+
   const chartData: ChartContent = {
     type: 'chart',
     title: '历史价格趋势（365天）',
@@ -63,7 +63,7 @@ function generateTimeSeriesData(): { table: TableContent; chart: ChartContent } 
       ],
     },
   }
-  
+
   return { table: tableData, chart: chartData }
 }
 
@@ -76,52 +76,52 @@ export async function* sendMessageStream(
     // ========== 第一步：发送时序数据（从 akshare 获取） ==========
     // 模拟从 akshare 获取数据的延迟
     await new Promise(resolve => setTimeout(resolve, 300))
-    
+
     const timeSeriesData = generateTimeSeriesData()
-    
+
     // 发送表格数据
     yield { type: 'content', data: timeSeriesData.table }
-    
+
     // 短暂延迟，让用户看到表格
     await new Promise(resolve => setTimeout(resolve, 200))
-    
+
     // 发送图表数据
     yield { type: 'content', data: timeSeriesData.chart }
-    
+
     // ========== 第二步：初始化步骤并开始执行 ==========
     // 初始化步骤状态
     const steps: Step[] = PREDICTION_STEPS.map(step => ({
       ...step,
       status: 'pending' as const,
     }))
-    
+
     // 模拟步骤执行（实际应该从后端SSE流中获取）
     for (let i = 0; i < steps.length; i++) {
       // 更新当前步骤为运行中
       steps[i].status = 'running'
       steps[i].message = '处理中...'
       onStepUpdate?.(steps.map(s => ({ ...s })))
-      
+
       yield { type: 'step', data: steps.map(s => ({ ...s })) }
-      
+
       // 模拟处理时间
       await new Promise(resolve => setTimeout(resolve, 1000 + Math.random() * 1000))
-      
+
       // 完成当前步骤
       steps[i].status = 'completed'
       steps[i].message = getStepMessage(i)
       onStepUpdate?.(steps.map(s => ({ ...s })))
-      
+
       yield { type: 'step', data: steps.map(s => ({ ...s })) }
     }
-    
+
     // ========== 第三步：生成最终分析结果内容 ==========
     const contents = await generateResponseContent(message)
-    
+
     for (const content of contents) {
       yield { type: 'content', data: content }
     }
-    
+
   } catch (error) {
     console.error('API Error:', error)
     throw error
@@ -146,15 +146,15 @@ function getStepMessage(stepIndex: number): string {
 async function generateResponseContent(message: string): Promise<(TextContent | ChartContent | TableContent)[]> {
   // 模拟API延迟
   await new Promise(resolve => setTimeout(resolve, 500))
-  
+
   const contents: (TextContent | ChartContent | TableContent)[] = []
-  
+
   // 添加文本内容
   contents.push({
     type: 'text',
     text: `好的！我已经完成了对 **600519.SH 贵州茅台** 的分析。以下是详细结果：`,
   })
-  
+
   // 添加表格内容（模型对比）
   contents.push({
     type: 'table',
@@ -167,13 +167,13 @@ async function generateResponseContent(message: string): Promise<(TextContent | 
       ['SeasonalNaive', 1.00, 55.6, 71.4],
     ],
   })
-  
+
   // 添加图表内容（预测图）
   const now = new Date()
   const labels: string[] = []
   const historicalData: number[] = []
   const forecastData: number[] = []
-  
+
   // 生成历史数据（过去30天）
   for (let i = 30; i > 0; i--) {
     const date = new Date(now)
@@ -181,7 +181,7 @@ async function generateResponseContent(message: string): Promise<(TextContent | 
     labels.push(date.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' }))
     historicalData.push(1800 + Math.random() * 100 - 50)
   }
-  
+
   // 生成预测数据（未来30天）
   const lastPrice = historicalData[historicalData.length - 1]
   for (let i = 1; i <= 30; i++) {
@@ -190,16 +190,16 @@ async function generateResponseContent(message: string): Promise<(TextContent | 
     labels.push(date.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' }))
     forecastData.push(lastPrice + (i * 2) + Math.random() * 20 - 10)
   }
-  
+
   // 合并所有标签
   const allLabels = [...labels]
-  
+
   // 历史数据：前面是实际数据，后面是null（不显示）
   const historicalDataFull = [...historicalData, ...new Array(30).fill(null)]
-  
+
   // 预测数据：前面是null（不显示），后面是预测数据
   const forecastDataFull = [...new Array(30).fill(null), ...forecastData]
-  
+
   contents.push({
     type: 'chart',
     title: '价格预测趋势图',
@@ -219,7 +219,7 @@ async function generateResponseContent(message: string): Promise<(TextContent | 
       ],
     },
   })
-  
+
   // 添加最终文本总结
   contents.push({
     type: 'text',
@@ -235,7 +235,7 @@ async function generateResponseContent(message: string): Promise<(TextContent | 
 
 建议关注春节动销情况和批价走势。`,
   })
-  
+
   return contents
 }
 
@@ -268,7 +268,7 @@ export async function* sendMessageStreamReal(
 
   while (true) {
     const { done, value } = await reader.read()
-    
+
     if (done) break
 
     buffer += decoder.decode(value, { stream: true })
@@ -278,11 +278,11 @@ export async function* sendMessageStreamReal(
     for (const line of lines) {
       // 跳过空行
       if (!line.trim()) continue
-      
+
       if (line.startsWith('data: ')) {
         try {
           const data = JSON.parse(line.slice(6))
-          
+
           if (data.type === 'step') {
             onStepUpdate?.(data.steps)
             yield { type: 'step', data: data.steps }

@@ -27,19 +27,19 @@ xiaoyi/
 │   │   ├── core/            # 核心模块
 │   │   │   ├── config.py           # 配置管理
 │   │   │   └── utils.py            # 工具函数
-│   │   ├── models/          # Pydantic数据模型
-│   │   │   └── chat.py             # 对话请求模型
 │   │   ├── agents/          # Agent层
 │   │   │   ├── __init__.py
 │   │   │   ├── nlp_agent.py        # NLP解析Agent
 │   │   │   ├── report_agent.py     # 报告生成Agent
 │   │   │   └── finance_agent.py    # 主编排Agent
-│   │   ├── forecasting/     # 预测模型层
+│   │   ├── models/         # 预测模型层
 │   │   │   ├── __init__.py
 │   │   │   ├── base.py             # 基础预测器接口
 │   │   │   ├── analyzer.py         # 时序特征分析
-│   │   │   ├── prophet_forecaster.py  # Prophet模型
-│   │   │   └── xgboost_forecaster.py  # XGBoost模型
+│   │   │   ├── prophet.py          # Prophet模型
+│   │   │   ├── xgboost.py          # XGBoost模型
+│   │   │   ├── randomforest.py     # RandomForest模型
+│   │   │   └── dlinear.py          # DLinear模型
 │   │   ├── data/            # 数据层
 │   │   │   ├── __init__.py
 │   │   │   └── fetcher.py          # 数据获取与预处理
@@ -108,7 +108,7 @@ cp .env.example .env
 python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-后端服务将在 `http://localhost:8000` 启动
+后端服务将在 `http://0.0.0.0:8000` 启动（支持跨域访问）
 
 ### 3. 前端设置
 
@@ -136,10 +136,9 @@ pnpm dev
 
 | 模块 | 路径 | 职责 |
 |------|------|------|
-| **API层** | `app/api/` | HTTP接口路由 |
-| **数据模型** | `app/models/` | 请求/响应Pydantic模型 |
+| **API层** | `app/api/` | HTTP接口路由（含数据模型） |
 | **Agent层** | `app/agents/` | AI Agent业务逻辑 |
-| **预测模型** | `app/forecasting/` | 时序预测模型 |
+| **预测模型** | `app/models/` | 时序预测模型 |
 | **数据层** | `app/data/` | 数据获取与处理 |
 | **核心** | `app/core/` | 配置和工具函数 |
 
@@ -148,13 +147,13 @@ pnpm dev
 - `nlp_agent.py` - NLP解析，将自然语言转为数据配置
 - `report_agent.py` - 生成专业的分析报告
 
-#### 预测模型层 (`app/forecasting/`)
+#### 预测模型层 (`app/models/`)
 - `base.py` - BaseForecaster接口，统一预测器规范
 - `analyzer.py` - 时序特征分析与特征工程
-- `prophet_forecaster.py` - Prophet时序预测模型
-- `xgboost_forecaster.py` - XGBoost机器学习预测
-- `randomforest_forecaster.py` - RandomForest集成学习预测
-- `dlinear_forecaster.py` - DLinear分解线性预测
+- `prophet.py` - Prophet时序预测模型
+- `xgboost.py` - XGBoost机器学习预测
+- `randomforest.py` - RandomForest集成学习预测
+- `dlinear.py` - DLinear分解线性预测
 
 #### 数据层 (`app/data/`)
 - `fetcher.py` - 从AKShare获取金融数据并标准化
