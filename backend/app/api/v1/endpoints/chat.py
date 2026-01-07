@@ -20,12 +20,20 @@ from app.sentiment import SentimentAnalyzer
 router = APIRouter()
 
 
+class ToolSettings(BaseModel):
+    """Tool 开关设置"""
+    forecast: bool = True       # 序列预测（默认开启）
+    report_rag: bool = False    # 研报检索（默认关闭）
+    news_rag: bool = False      # 新闻 RAG（默认关闭）
+
+
 class ChatRequest(BaseModel):
     """聊天请求模型"""
     message: str
     model: str = "prophet"  # 预测模型：prophet, xgboost, randomforest, dlinear
     session_id: Optional[str] = None  # 会话ID，可选
     history: Optional[List[Dict[str, str]]] = None  # 对话历史，可选（用于兼容）
+    tools: ToolSettings = ToolSettings()  # Tool 开关设置
 
 
 class SuggestionsRequest(BaseModel):
@@ -71,28 +79,45 @@ async def chat_stream(request: ChatRequest):
             # 添加用户消息到历史（在处理前添加，以便后续更新）
             session_manager.add_message(session_id, "user", user_input)
 
+            # 获取 Tools 设置
+            tools = request.tools
+
             # ========== 意图判断 ==========
             intent_agent = IntentAgent(api_key)
             intent_result = await asyncio.to_thread(intent_agent.judge_intent, user_input, conversation_history)
             intent = intent_result.get("intent", "analyze")
+            intent_reason = intent_result.get("reason", "")
 
-            # 如果只是提问，直接回答
-            if intent == "answer":
-                # 直接回答问题，不执行完整分析
-                answer = await asyncio.to_thread(intent_agent.answer_question, user_input, conversation_history)
+            # 发送意图识别结果给前端
+            yield format_sse("intent", {
+                "intent": intent,
+                "reason": intent_reason
+            })
 
-                # 发送回答
-                text_content = {
-                    "type": "text",
-                    "text": answer
-                }
-                yield format_sse("content", {"content": text_content})
+            # 如果 forecast tool 关闭，或者只是提问，直接回答
+            if not tools.forecast or intent == "answer":
+                # 流式回答问题，不执行完整分析
+                full_answer = ""
+
+                # 使用流式生成器
+                def stream_answer():
+                    return intent_agent.answer_question_stream(user_input, conversation_history)
+
+                generator = await asyncio.to_thread(stream_answer)
+
+                for chunk in generator:
+                    full_answer += chunk
+                    # 发送文本片段
+                    yield format_sse("text_delta", {"delta": chunk})
+
+                # 发送完成信号
+                yield format_sse("text_done", {"text": full_answer})
 
                 # 添加助手回复到会话历史
-                session_manager.add_message(session_id, "assistant", answer)
+                session_manager.add_message(session_id, "assistant", full_answer)
                 return
 
-            # 如果需要执行新分析，继续执行完整流程
+            # 如果需要执行新分析且 forecast tool 开启，继续执行完整流程
 
             # 初始化步骤状态
             steps = [{"id": s["id"], "name": s["name"], "status": "pending"} for s in STEPS]

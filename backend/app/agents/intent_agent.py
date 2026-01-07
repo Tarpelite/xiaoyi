@@ -5,7 +5,7 @@
 判断用户意图：是否需要执行新的数据分析，还是只需要回答问题
 """
 
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Generator
 from openai import OpenAI
 
 
@@ -134,6 +134,57 @@ class IntentAgent:
             temperature=0.3,
             max_tokens=500,
         )
-        
+
         return response.choices[0].message.content
+
+    def answer_question_stream(
+        self,
+        user_query: str,
+        conversation_history: Optional[List[Dict[str, str]]] = None
+    ) -> Generator[str, None, None]:
+        """
+        基于对话历史流式回答问题（不执行新分析）
+
+        Args:
+            user_query: 用户问题
+            conversation_history: 对话历史
+
+        Yields:
+            文本片段
+        """
+        system_prompt = """你是专业的金融分析助手。根据对话历史中的分析结果，回答用户的问题。
+
+如果对话历史中有之前的分析结果，请基于这些结果回答问题。
+如果问题涉及预测结果、模型性能、数据特征等，请从对话历史中提取相关信息。
+如果无法从历史中找到相关信息，请礼貌地说明需要先进行分析。"""
+
+        messages = [{"role": "system", "content": system_prompt}]
+
+        # 添加对话历史
+        if conversation_history:
+            recent_history = conversation_history[-10:] if len(conversation_history) > 10 else conversation_history
+            for msg in recent_history:
+                messages.append({
+                    "role": msg["role"],
+                    "content": msg["content"]
+                })
+
+        # 添加当前问题
+        messages.append({
+            "role": "user",
+            "content": user_query
+        })
+
+        # 使用流式响应
+        response = self.client.chat.completions.create(
+            model="deepseek-chat",
+            messages=messages,
+            temperature=0.3,
+            max_tokens=500,
+            stream=True
+        )
+
+        for chunk in response:
+            if chunk.choices and chunk.choices[0].delta.content:
+                yield chunk.choices[0].delta.content
 
