@@ -27,8 +27,23 @@ const config: Config = {
         }
       },
       fontFamily: {
-        sans: ['var(--font-noto-sans)', 'system-ui', 'sans-serif'],
-        mono: ['var(--font-jetbrains-mono)', 'monospace'],
+        sans: [
+          '-apple-system',
+          'BlinkMacSystemFont',
+          '"Segoe UI"',
+          '"PingFang SC"',
+          '"Hiragino Sans GB"',
+          '"Microsoft YaHei"',
+          '"Noto Sans SC"',
+          'sans-serif',
+        ],
+        mono: [
+          '"SF Mono"',
+          '"Fira Code"',
+          '"JetBrains Mono"',
+          'Consolas',
+          'monospace',
+        ],
       },
       animation: {
         'pulse-soft': 'pulse-soft 2s infinite',
