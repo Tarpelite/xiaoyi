@@ -44,9 +44,13 @@ jobs:
           DEEPSEEK_API_KEY=${{ secrets.DEEPSEEK_API_KEY }}
           HOST=0.0.0.0
           PORT=8000
+          REDIS_HOST=redis
+          REDIS_PORT=6379
+          REDIS_DB=0
           EOF
           
           echo "📝 NEXT_PUBLIC_API_URL=http://${{ steps.ip.outputs.SERVER_IP }}:18000"
+          echo "📝 Redis配置: redis:6379"
 
       - name: 🛑 Stop existing containers
         run: docker compose down --remove-orphans || true
@@ -61,6 +65,16 @@ jobs:
         run: |
           echo "等待服务启动..."
           sleep 15
+          
+          for i in {1..20}; do
+            if docker compose exec -T redis redis-cli ping > /dev/null 2>&1; then
+              echo "✅ Redis就绪"
+              break
+            fi
+            [ $i -eq 20 ] && { echo "❌ Redis超时"; docker compose logs redis; exit 1; }
+            echo "等待Redis... ($i/20)"
+            sleep 2
+          done
           
           for i in {1..30}; do
             if curl -sf http://localhost:18000/health > /dev/null 2>&1; then
@@ -87,6 +101,7 @@ jobs:
           echo "=========================================="
           docker compose ps
           echo "=========================================="
+          docker compose exec -T redis redis-cli ping && echo "Redis OK"
           curl -sf http://localhost:18000/health && echo "后端 OK"
           curl -sf http://localhost:13000 > /dev/null && echo "前端 OK"
 
