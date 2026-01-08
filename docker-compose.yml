@@ -1,7 +1,7 @@
 services:
   # ===== Redis 服务 =====
   redis:
-    image: redis:7-alpine
+    image: aqtbrodh2awvkc.xuanyuan.run/redis:7-alpine
     container_name: xiaoyi-redis
     restart: unless-stopped
     ports:
