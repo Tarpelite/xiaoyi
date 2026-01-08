@@ -100,7 +100,7 @@ function InteractiveChart({ content }: { content: ChartContent }) {
   // 转换数据格式为 Recharts 格式
   const chartData = useMemo(() => {
     return data.labels.map((label, index) => {
-      const item: Record<string, string | number> = { name: label }
+      const item: Record<string, string | number | null> = { name: label }
       data.datasets.forEach((dataset) => {
         item[dataset.label] = dataset.data[index]
       })

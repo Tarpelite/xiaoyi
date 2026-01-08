@@ -12,6 +12,7 @@ from typing import Dict, Any
 from datetime import datetime
 
 from app.core.session import Session
+from app.core.session_manager import get_session_manager
 from app.schemas.session_schema import TimeSeriesPoint, SessionStatus
 from app.agents.nlp_agent import NLPAgent
 from app.agents.report_agent import ReportAgent
@@ -102,6 +103,10 @@ class AnalysisTask:
                 forecast_result
             )
             session.save_conclusion(report)
+            
+            # 添加助手回复到会话历史
+            session_manager = get_session_manager()
+            session_manager.add_message(session_id, "assistant", report)
             
             # 标记完成 - 使用重试机制确保成功
             print(f"\n{'='*60}")

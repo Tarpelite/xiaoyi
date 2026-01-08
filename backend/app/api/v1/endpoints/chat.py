@@ -171,37 +171,90 @@ async def chat_stream(request: ChatRequest):
 
                 # 发送搜索开始状态
                 yield format_sse("step", {"steps": [
-                    {"id": "news_search", "name": "新闻搜索", "status": "running", "message": "正在搜索相关新闻..."}
+                    {"id": "news_extract", "name": "解析查询", "status": "running", "message": "正在解析搜索意图..."}
                 ]})
 
-                # 搜索新闻
                 try:
-                    tavily_client = TavilyNewsClient(settings.tavily_api_key)
-
-                    # 搜索新闻
-                    search_results = await asyncio.to_thread(
-                        tavily_client.search,
-                        query=user_input,
-                        days=30,
-                        max_results=10
+                    # Step 1: 使用 LLM 提取关键词
+                    keyword_result = await asyncio.to_thread(
+                        intent_agent.extract_search_keywords,
+                        user_input
                     )
+                    keywords = keyword_result.get("keywords", user_input)
+                    is_stock = keyword_result.get("is_stock", False)
+                    stock_name = keyword_result.get("stock_name", "")
+                    stock_code = keyword_result.get("stock_code", "")
 
-                    print(f"[News] 找到 {search_results['count']} 条新闻")
+                    print(f"[News] 关键词提取: keywords={keywords}, is_stock={is_stock}, stock_name={stock_name}, stock_code={stock_code}")
 
                     yield format_sse("step", {"steps": [
-                        {"id": "news_search", "name": "新闻搜索", "status": "completed", "message": f"找到 {search_results['count']} 条相关新闻"}
+                        {"id": "news_extract", "name": "解析查询", "status": "completed", "message": f"关键词: {keywords}"},
+                        {"id": "news_search", "name": "新闻搜索", "status": "running", "message": "正在搜索相关新闻..."}
                     ]})
 
-                    # 使用 LLM 总结新闻（LLM会在文本中嵌入markdown链接）
+                    tavily_client = TavilyNewsClient(settings.tavily_api_key)
+                    tavily_results = {"results": [], "count": 0}
+                    akshare_news_df = None
+
+                    # Step 2: 根据是否股票相关选择数据源
+                    if is_stock and stock_code:
+                        # 股票相关：使用 AkShare + Tavily
+                        print(f"[News] 股票搜索模式: AkShare + Tavily")
+
+                        # 并行获取 AkShare 和 Tavily
+                        akshare_news_df = await asyncio.to_thread(DataFetcher.fetch_news, stock_code, 50)
+                        tavily_results = await asyncio.to_thread(
+                            tavily_client.search_stock_news,
+                            stock_name=stock_name or keywords,
+                            days=30,
+                            max_results=10
+                        )
+                    else:
+                        # 非股票：仅 Tavily（使用中国域名过滤）
+                        print(f"[News] 通用搜索模式: Tavily only")
+                        tavily_results = await asyncio.to_thread(
+                            tavily_client.search_stock_news,  # 仍使用中文域名过滤
+                            stock_name=keywords,
+                            days=30,
+                            max_results=10
+                        )
+
+                    akshare_count = len(akshare_news_df) if akshare_news_df is not None and not akshare_news_df.empty else 0
+                    tavily_count = tavily_results.get("count", 0)
+                    total_count = akshare_count + tavily_count
+
+                    print(f"[News] 找到新闻: AkShare={akshare_count}, Tavily={tavily_count}, 总计={total_count}")
+
                     yield format_sse("step", {"steps": [
-                        {"id": "news_search", "name": "新闻搜索", "status": "completed", "message": f"找到 {search_results['count']} 条新闻"},
+                        {"id": "news_extract", "name": "解析查询", "status": "completed", "message": f"关键词: {keywords}"},
+                        {"id": "news_search", "name": "新闻搜索", "status": "completed", "message": f"找到 {total_count} 条新闻"},
                         {"id": "news_summary", "name": "新闻总结", "status": "running", "message": "生成新闻摘要..."}
                     ]})
 
-                    # 构建 LLM 上下文
-                    news_context = tavily_client.format_results_for_llm(search_results)
+                    # Step 3: 构建综合新闻上下文
+                    news_context_parts = []
 
-                    # 流式生成总结
+                    # AkShare 新闻（无 URL）
+                    if akshare_news_df is not None and not akshare_news_df.empty:
+                        news_context_parts.append("=== 即时新闻（AkShare）===")
+                        for _, row in akshare_news_df.head(15).iterrows():
+                            title = row.get("新闻标题", row.get("标题", ""))
+                            content = str(row.get("新闻内容", row.get("内容", "")))[:100]
+                            if title:
+                                news_context_parts.append(f"- {title}: {content}")
+
+                    # Tavily 新闻（有 URL）
+                    if tavily_results.get("results"):
+                        news_context_parts.append("\n=== 网络新闻（Tavily，带URL）===")
+                        for item in tavily_results["results"]:
+                            title = item.get("title", "")
+                            url = item.get("url", "")
+                            content = item.get("content", "")[:100]
+                            news_context_parts.append(f"- 【{title}】({url}): {content}")
+
+                    news_context = "\n".join(news_context_parts) if news_context_parts else "未找到相关新闻。"
+
+                    # Step 4: 流式生成 LLM 总结
                     full_answer = ""
 
                     def stream_news_summary():
@@ -216,7 +269,8 @@ async def chat_stream(request: ChatRequest):
                     yield format_sse("text_done", {"text": full_answer})
 
                     yield format_sse("step", {"steps": [
-                        {"id": "news_search", "name": "新闻搜索", "status": "completed", "message": f"找到 {search_results['count']} 条新闻"},
+                        {"id": "news_extract", "name": "解析查询", "status": "completed", "message": f"关键词: {keywords}"},
+                        {"id": "news_search", "name": "新闻搜索", "status": "completed", "message": f"找到 {total_count} 条新闻"},
                         {"id": "news_summary", "name": "新闻总结", "status": "completed", "message": "总结完成"}
                     ]})
 
@@ -303,7 +357,7 @@ async def chat_stream(request: ChatRequest):
             yield format_sse("step", {"steps": steps})
             await asyncio.sleep(0.1)
 
-            # ========== 步骤2: 新闻获取与情绪分析 ==========
+            # ========== 步骤2: 新闻获取与情绪分析（始终使用 AkShare + Tavily） ==========
             steps[1]["status"] = "running"
             steps[1]["message"] = "获取相关新闻..."
             yield format_sse("step", {"steps": steps})
@@ -313,27 +367,24 @@ async def chat_stream(request: ChatRequest):
             stock_symbol = data_config.get("params", {}).get("symbol", "")
             stock_name = parsed.get("analysis_config", {}).get("stock_name", user_input)
 
-            # 检查是否需要 Tavily 增强（news_rag=True 时启用）
-            use_tavily = intent_tools.get("news_rag", False)
+            from app.news import TavilyNewsClient
 
             # AkShare 新闻获取（始终执行）
             news_df = await asyncio.to_thread(DataFetcher.fetch_news, stock_symbol, 50)
             tavily_results = {"results": [], "count": 0}
 
-            # 如果启用 Tavily，获取网络新闻
-            if use_tavily:
-                from app.news import TavilyNewsClient
-                try:
-                    tavily_client = TavilyNewsClient(settings.tavily_api_key)
-                    tavily_results = await asyncio.to_thread(
-                        tavily_client.search_stock_news,
-                        stock_name=stock_name,
-                        days=30,
-                        max_results=10
-                    )
-                    print(f"[Tavily] 增强搜索: 找到 {tavily_results['count']} 条新闻")
-                except Exception as e:
-                    print(f"[Tavily] 搜索失败（降级为仅 AkShare）: {e}")
+            # Tavily 新闻获取（始终执行，用于补充和提供链接）
+            try:
+                tavily_client = TavilyNewsClient(settings.tavily_api_key)
+                tavily_results = await asyncio.to_thread(
+                    tavily_client.search_stock_news,
+                    stock_name=stock_name,
+                    days=30,
+                    max_results=10
+                )
+                print(f"[Tavily] 找到 {tavily_results['count']} 条新闻")
+            except Exception as e:
+                print(f"[Tavily] 搜索失败（降级为仅 AkShare）: {e}")
 
             akshare_count = len(news_df) if news_df is not None and not news_df.empty else 0
             tavily_count = tavily_results.get("count", 0)
@@ -344,7 +395,7 @@ async def chat_stream(request: ChatRequest):
             await asyncio.sleep(0.1)
 
             # 根据是否有 Tavily 结果选择分析方法
-            if use_tavily and tavily_count > 0:
+            if tavily_count > 0:
                 # 使用增强版分析（带链接）
                 sentiment_result = await asyncio.to_thread(
                     sentiment_analyzer.analyze_with_links,
@@ -354,7 +405,7 @@ async def chat_stream(request: ChatRequest):
                 # 发送带链接的情绪分析结果
                 yield format_sse("content", {"content": {"type": "text", "text": sentiment_result["formatted_text"]}})
             else:
-                # 使用原有分析方法（无链接）
+                # Tavily 无结果时，使用原有分析方法（仅 AkShare，无链接）
                 sentiment_result = await asyncio.to_thread(sentiment_analyzer.analyze, news_df)
                 # 发送原有格式的情绪分析结果
                 sentiment_text = f"""**市场情绪分析**

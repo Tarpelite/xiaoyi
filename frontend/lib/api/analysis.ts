@@ -121,9 +121,9 @@ export async function createAnalysisTask(
   message: string,
   model: string = 'prophet',
   context: string = '',
-  sessionId?: string,
+  sessionId?: string | null,
   forceIntent?: string
-): Promise<{ session_id: string; status: string }> {
+): Promise<{ session_id: string; status: string; intent?: string }> {
   const response = await fetch(`${API_BASE_URL}/api/v2/analysis/create`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -131,7 +131,7 @@ export async function createAnalysisTask(
       message,
       model,
       context,
-      session_id: sessionId,
+      session_id: sessionId || undefined,
       force_intent: forceIntent
     })
   })

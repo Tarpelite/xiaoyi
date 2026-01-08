@@ -294,3 +294,62 @@ forecast_horizon (预测天数):
             if chunk.choices and chunk.choices[0].delta.content:
                 yield chunk.choices[0].delta.content
 
+    def extract_search_keywords(self, user_query: str) -> Dict[str, Any]:
+        """
+        从用户查询中提取搜索关键词，判断是否股票相关
+
+        Args:
+            user_query: 用户原始问题，如 "找茅台最近的新闻"
+
+        Returns:
+            {
+                "keywords": str,      # 提取的关键词
+                "is_stock": bool,     # 是否是股票相关
+                "stock_name": str,    # 股票名称（如有）
+                "stock_code": str,    # 股票代码（如有）
+            }
+        """
+        system_prompt = """从用户问题中提取搜索关键词，判断是否股票相关。
+
+分析用户想搜索什么，提取核心关键词，判断是否涉及具体股票/公司。
+
+示例：
+- "找茅台最近的新闻" → keywords="贵州茅台", is_stock=true, stock_name="贵州茅台", stock_code="600519"
+- "搜索比亚迪的资讯" → keywords="比亚迪", is_stock=true, stock_name="比亚迪", stock_code="002594"
+- "查一下新能源行业动态" → keywords="新能源行业", is_stock=false, stock_name="", stock_code=""
+- "最近有什么关于人工智能的消息" → keywords="人工智能", is_stock=false, stock_name="", stock_code=""
+- "宁德时代最新动态" → keywords="宁德时代", is_stock=true, stock_name="宁德时代", stock_code="300750"
+- "中石油有什么新闻" → keywords="中国石油", is_stock=true, stock_name="中国石油", stock_code="601857"
+
+返回 JSON 格式:
+{
+    "keywords": "提取的搜索关键词",
+    "is_stock": true/false,
+    "stock_name": "股票名称或空字符串",
+    "stock_code": "股票代码或空字符串"
+}"""
+
+        try:
+            response = self.client.chat.completions.create(
+                model="deepseek-chat",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": f"用户问题: {user_query}"}
+                ],
+                temperature=0.1,
+                response_format={"type": "json_object"}
+            )
+
+            import json
+            result = json.loads(response.choices[0].message.content)
+            return result
+
+        except Exception as e:
+            print(f"[IntentAgent] 关键词提取失败: {e}")
+            return {
+                "keywords": user_query,
+                "is_stock": False,
+                "stock_name": "",
+                "stock_code": ""
+            }
+

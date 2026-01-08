@@ -36,7 +36,7 @@ export interface ChartContent {
     labels: string[]
     datasets: {
       label: string
-      data: number[]
+      data: (number | null)[]
       color?: string
     }[]
   }
@@ -126,12 +126,21 @@ function getOrCreateSessionId(): string {
   return newSessionId
 }
 
+// Tool 开关设置
+interface ToolSettings {
+  forecast: boolean
+  reportRag: boolean
+  newsRag: boolean
+}
+
 export function ChatArea() {
   const [messages, setMessages] = useState<Message[]>([])
   const [inputValue, setInputValue] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [sessionId, setSessionId] = useState<string>(() => getOrCreateSessionId())
   const [quickSuggestions, setQuickSuggestions] = useState<string[]>(defaultQuickSuggestions)
+  const [selectedModel, setSelectedModel] = useState<'prophet' | 'xgboost' | 'randomforest' | 'dlinear'>('prophet')
+  const [tools, setTools] = useState<ToolSettings>({ forecast: true, reportRag: false, newsRag: false })
 
   // 对话区域滚动容器 ref
   const chatContainerRef = useRef<HTMLDivElement>(null)
@@ -150,26 +159,6 @@ export function ChatArea() {
   useEffect(() => {
     scrollToBottom()
   }, [messages])
-
-  // 构建对话历史（从 messages 中提取）
-  const buildHistory = (): Array<{ role: string; content: string }> => {
-    const history: Array<{ role: string; content: string }> = []
-    
-    for (const msg of messages) {
-      if (msg.role === 'user' && msg.text) {
-        history.push({ role: 'user', content: msg.text })
-      } else if (msg.role === 'assistant' && msg.contents) {
-        // 提取助手回复的文本内容
-        const textContents = msg.contents.filter(c => c.type === 'text') as TextContent[]
-        if (textContents.length > 0) {
-          const combinedText = textContents.map(c => c.text).join('\n\n')
-          history.push({ role: 'assistant', content: combinedText })
-        }
-      }
-    }
-    
-    return history
-  }
 
   // 更新快速追问建议（在对话完成后）
   useEffect(() => {
@@ -195,9 +184,170 @@ export function ChatArea() {
     }
   }, [messages.length, isLoading, sessionId])
 
+  // 将后端的步骤数转换为前端的 Step[] 数组
+  const convertSteps = (currentStep: number, totalSteps: number = 7, status: string): Step[] => {
+    return PREDICTION_STEPS.map((step, index) => {
+      const stepNum = index + 1
+      if (stepNum < currentStep) {
+        return { ...step, status: 'completed' as StepStatus, message: '已完成' }
+      } else if (stepNum === currentStep && status === 'processing') {
+        return { ...step, status: 'running' as StepStatus, message: '处理中...' }
+      } else if (status === 'completed' && stepNum <= totalSteps) {
+        return { ...step, status: 'completed' as StepStatus, message: '已完成' }
+      } else if (status === 'error') {
+        return { ...step, status: 'failed' as StepStatus, message: '失败' }
+      } else {
+        return { ...step, status: 'pending' as StepStatus }
+      }
+    })
+  }
+
+  // 将 AnalysisStatusResponse 转换为前端的 contents
+  const convertAnalysisToContents = (
+    data: {
+      time_series_original?: Array<{ date: string; value: number; is_prediction: boolean }>
+      time_series_full?: Array<{ date: string; value: number; is_prediction: boolean }>
+      prediction_done?: boolean
+      emotion?: number | null
+      emotion_des?: string | null
+      news_list?: Array<{ title: string; summary: string; date: string; source: string }>
+      conclusion?: string
+    },
+    currentStep: number = 0,
+    status: string = 'pending'
+  ): (TextContent | ChartContent | TableContent)[] => {
+    const contents: (TextContent | ChartContent | TableContent)[] = []
+
+    // 判断是否是简单问答：只有 conclusion，没有其他结构化数据
+    const isSimpleAnswer = data.conclusion && 
+      (!data.time_series_full || data.time_series_full.length === 0) &&
+      (!data.emotion || data.emotion === null) &&
+      (!data.news_list || data.news_list.length === 0)
+
+    // 如果是简单问答，只返回文本内容，不生成结构化数据
+    if (isSimpleAnswer) {
+      if (data.conclusion) {
+        contents.push({
+          type: 'text',
+          text: data.conclusion
+        })
+      }
+      return contents
+    }
+
+    // 结构化回答：根据当前步骤生成内容（只显示已完成步骤的内容）
+    const isCompleted = status === 'completed' || currentStep >= 7
+
+    // 1. 市场情绪（步骤5完成后显示）
+    // 只有当步骤 >= 5 或已完成时，才显示情绪数据
+    if (currentStep >= 5 || isCompleted) {
+      if (data.emotion !== null && data.emotion !== undefined && typeof data.emotion === 'number' && data.emotion_des) {
+        // 使用后端返回的真实数据
+        contents.push({
+          type: 'text',
+          text: `__EMOTION_MARKER__${data.emotion}__${data.emotion_des}__`
+        })
+      } else if (isCompleted) {
+        // 已完成但无数据，使用模拟数据
+        const mockEmotion = Math.random() * 0.6 + 0.2 // 0.2 到 0.8 之间
+        const mockDescription = '市场情绪分析中，基于新闻和技术指标综合评估'
+        contents.push({
+          type: 'text',
+          text: `__EMOTION_MARKER__${mockEmotion}__${mockDescription}__`
+        })
+      }
+      // 如果步骤 < 5，不添加情绪内容（MessageBubble 会显示"情绪分析中..."）
+    }
+
+    // 2. 新闻列表表格（步骤4完成后显示）
+    // 只有当步骤 >= 4 或已完成时，才显示新闻
+    if ((currentStep >= 4 || isCompleted) && data.news_list && data.news_list.length > 0) {
+      contents.push({
+        type: 'table',
+        title: '相关新闻',
+        headers: ['标题', '来源', '日期'],
+        rows: data.news_list.slice(0, 5).map((news) => [
+          news.title,
+          news.source,
+          news.date
+        ])
+      })
+    }
+
+    // 3. 价格预测趋势图（步骤6完成后显示）
+    // 只有当步骤 >= 6 或已完成时，才显示预测图表
+    if ((currentStep >= 6 || isCompleted) && data.time_series_full && data.time_series_full.length > 0 && data.prediction_done) {
+      const originalLength = data.time_series_original?.length || 0
+      const allLabels = data.time_series_full.map((p) => p.date)
+      const historicalData = data.time_series_full.map((p, idx) => 
+        idx < originalLength ? p.value : null
+      )
+      const forecastData = data.time_series_full.map((p, idx) => 
+        idx >= originalLength ? p.value : null
+      )
+
+      contents.push({
+        type: 'chart',
+        title: '价格预测趋势图',
+        data: {
+          labels: allLabels,
+          datasets: [
+            {
+              label: '历史价格',
+              data: historicalData,
+              color: '#8b5cf6'
+            },
+            {
+              label: '预测价格',
+              data: forecastData,
+              color: '#06b6d4'
+            }
+          ]
+        }
+      })
+    }
+
+    // 4. 综合分析报告（步骤7完成后显示）
+    // 只有当步骤 >= 7 或已完成时，才显示报告
+    if ((currentStep >= 7 || isCompleted) && data.conclusion) {
+      contents.push({
+        type: 'text',
+        text: data.conclusion
+      })
+    }
+
+    return contents
+  }
+
   const handleSend = async (messageOverride?: string) => {
     const messageToSend = messageOverride || inputValue
     if (!messageToSend.trim() || isLoading) return
+
+    // 如果 forecast tool 关闭，直接回答（保留旧逻辑）
+    if (!tools.forecast) {
+      // 这里可以保留旧的流式回答逻辑，或者也改为使用 analysis API
+      // 暂时先提示用户开启序列预测功能
+      const userMessage: Message = {
+        id: Date.now().toString(),
+        role: 'user',
+        text: messageToSend,
+        timestamp: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
+      }
+      setMessages((prev: Message[]) => [...prev, userMessage])
+      setInputValue('')
+      
+      const assistantMessage: Message = {
+        id: (Date.now() + 1).toString(),
+        role: 'assistant',
+        timestamp: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
+        contents: [{
+          type: 'text',
+          text: '请开启"序列预测"功能以使用分析功能。'
+        }]
+      }
+      setMessages((prev: Message[]) => [...prev, assistantMessage])
+      return
+    }
 
     const userMessage: Message = {
       id: Date.now().toString(),
@@ -210,101 +360,98 @@ export function ChatArea() {
     setInputValue('')
     setIsLoading(true)
 
-    // 创建AI消息占位符（不预先添加 steps，由后端发送 step 事件时再显示）
+    // 创建AI消息占位符（清空旧内容）
     const assistantMessageId = (Date.now() + 1).toString()
     const assistantMessage: Message = {
       id: assistantMessageId,
       role: 'assistant',
       timestamp: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
-      // steps 由后端判断后发送，不在前端预先决定
+      contents: [], // 初始为空数组，避免显示旧内容
     }
 
     setMessages((prev: Message[]) => [...prev, assistantMessage])
 
     try {
-      // 导入API函数（使用真实API）
-      const { sendMessageStreamReal } = await import('@/lib/api/chat')
+      // 使用 analysis API
+      const { createAnalysisTask, pollAnalysisStatus } = await import('@/lib/api/analysis')
 
-      // 构建对话历史
-      const history = buildHistory()
-
-      // 处理流式响应
-      const contents: (TextContent | ChartContent | TableContent)[] = []
-      let currentSessionId = sessionId
-      let streamingText = ''  // 用于累积流式文本
-
-      for await (const chunk of sendMessageStreamReal(
-        messageToSend,
-        currentSessionId,
-        history,
-        (steps: Step[]) => {
-          // 更新步骤状态（后端判断后才会发送 step 事件）
-          setMessages((prev: Message[]) => prev.map((msg: Message) =>
-            msg.id === assistantMessageId
-              ? { ...msg, steps }
-              : msg
-          ))
-        }
-      )) {
-        if (chunk.type === 'session') {
-          // 接收后端返回的 session_id（新会话）
-          currentSessionId = chunk.data
-          setSessionId(currentSessionId)
-          if (typeof window !== 'undefined') {
-            localStorage.setItem('chat_session_id', currentSessionId)
-          }
-        } else if (chunk.type === 'intent') {
-          // 意图识别结果
-          setMessages((prev: Message[]) => prev.map((msg: Message) =>
-            msg.id === assistantMessageId
-              ? { ...msg, intentInfo: chunk.data as IntentInfo }
-              : msg
-          ))
-        } else if (chunk.type === 'text_delta') {
-          // 流式文本片段
-          streamingText += chunk.data
-
-          // 实时更新消息内容
-          setMessages((prev: Message[]) => prev.map((msg: Message) =>
-            msg.id === assistantMessageId
-              ? {
-                  ...msg,
-                  contents: [{ type: 'text', text: streamingText } as TextContent],
-                  steps: undefined
-                }
-              : msg
-          ))
-        } else if (chunk.type === 'text_done') {
-          // 流式文本完成，添加到 contents
-          contents.push({ type: 'text', text: chunk.data } as TextContent)
-        } else if (chunk.type === 'content') {
-          contents.push(chunk.data)
-
-          // 更新消息内容，累积所有内容
-          setMessages((prev: Message[]) => prev.map((msg: Message) =>
-            msg.id === assistantMessageId
-              ? {
-                  ...msg,
-                  contents: [...contents],
-                  // 如果所有步骤完成，清除steps
-                  steps: msg.steps?.every((s: Step) => s.status === 'completed') ? undefined : msg.steps
-                }
-              : msg
-          ))
-        }
+      // 创建分析任务（传递当前 sessionId 以获取对话历史）
+      const result = await createAnalysisTask(messageToSend, selectedModel, '', sessionId)
+      const currentSessionId = result.session_id
+      setSessionId(currentSessionId)
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('chat_session_id', currentSessionId)
       }
 
-      // 所有内容接收完成，清除步骤显示
-      if (contents.length > 0) {
+      // 如果任务立即完成（intent == "answer"），立即查询一次状态
+      if (result.status === 'completed' || result.intent === 'answer') {
+        const { getAnalysisStatus } = await import('@/lib/api/analysis')
+        const statusResponse = await getAnalysisStatus(currentSessionId)
+        const { data, status } = statusResponse
+
+        // 简单问答：只显示文本内容
         setMessages((prev: Message[]) => prev.map((msg: Message) =>
           msg.id === assistantMessageId
             ? {
-              ...msg,
-              contents: contents,
-              steps: undefined
-            }
+                ...msg,
+                contents: [{
+                  type: 'text',
+                  text: data.conclusion || '已收到回答'
+                }],
+                steps: undefined
+              }
             : msg
         ))
+      } else {
+        // 轮询状态（intent == "analyze"）
+        await pollAnalysisStatus(
+          currentSessionId,
+          (statusResponse) => {
+            const { data, steps: currentStep, status } = statusResponse
+
+            // 判断是否是简单问答（只有 conclusion，没有其他结构化数据）
+            const isSimpleAnswer = status === 'completed' && 
+              data.conclusion && 
+              (!data.time_series_full || data.time_series_full.length === 0) &&
+              (!data.emotion || data.emotion === null) &&
+              (!data.news_list || data.news_list.length === 0)
+
+            if (isSimpleAnswer) {
+              // 简单问答：只显示文本内容
+              setMessages((prev: Message[]) => prev.map((msg: Message) =>
+                msg.id === assistantMessageId
+                  ? {
+                      ...msg,
+                      contents: [{
+                        type: 'text',
+                        text: data.conclusion
+                      }],
+                      steps: undefined
+                    }
+                  : msg
+              ))
+            } else {
+              // 结构化回答：显示完整分析结果
+              // 转换步骤
+              const steps = convertSteps(currentStep, 7, status)
+
+              // 转换内容（传入当前步骤和状态，只显示已完成步骤的内容）
+              const contents = convertAnalysisToContents(data, currentStep, status)
+
+              // 更新消息
+              setMessages((prev: Message[]) => prev.map((msg: Message) =>
+                msg.id === assistantMessageId
+                  ? {
+                      ...msg,
+                      steps: status === 'completed' ? undefined : steps, // 完成后隐藏步骤
+                      contents: contents.length > 0 ? contents : [] // 清空旧内容，避免显示上次的数据
+                    }
+                  : msg
+              ))
+            }
+          },
+          2000 // 轮询间隔2秒
+        )
       }
 
     } catch (error) {

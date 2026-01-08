@@ -188,12 +188,11 @@ class UnifiedTaskProcessor:
 
         session.update_step_detail(1, "completed", f"已获取历史数据 {len(df)} 天")
 
-        # Step 2: 新闻获取与情绪分析
+        # Step 2: 新闻获取与情绪分析（始终使用 AkShare + Tavily）
         session.update_step_detail(2, "running", "获取相关新闻...")
 
-        use_tavily = intent_result.get("tools", {}).get("news_rag", False)
         news_list, sentiment_result = await self._fetch_news_and_sentiment(
-            stock_symbol, stock_name, use_tavily
+            stock_symbol, stock_name
         )
         session.save_news(news_list)
 
@@ -264,40 +263,42 @@ class UnifiedTaskProcessor:
     async def _fetch_news_and_sentiment(
         self,
         stock_symbol: str,
-        stock_name: str,
-        use_tavily: bool
+        stock_name: str
     ) -> tuple:
-        """获取新闻和情绪分析"""
+        """
+        获取新闻和情绪分析
+
+        分析请求始终使用 AkShare + Tavily 双数据源
+        """
         news_items = []
         tavily_results = {"results": [], "count": 0}
 
-        # AkShare 新闻
+        # AkShare 新闻（始终获取）
         news_df = await asyncio.to_thread(DataFetcher.fetch_news, stock_symbol, 50)
 
-        # Tavily 新闻（如果启用）
-        if use_tavily:
-            try:
-                from app.news import TavilyNewsClient
-                tavily_client = TavilyNewsClient(settings.tavily_api_key)
-                tavily_results = await asyncio.to_thread(
-                    tavily_client.search_stock_news,
-                    stock_name=stock_name,
-                    days=30,
-                    max_results=10
-                )
-                print(f"[Tavily] 找到 {tavily_results['count']} 条新闻")
+        # Tavily 新闻（始终获取，用于补充和提供链接）
+        try:
+            from app.news import TavilyNewsClient
+            tavily_client = TavilyNewsClient(settings.tavily_api_key)
+            tavily_results = await asyncio.to_thread(
+                tavily_client.search_stock_news,
+                stock_name=stock_name,
+                days=30,
+                max_results=10
+            )
+            print(f"[Tavily] 找到 {tavily_results['count']} 条新闻")
 
-                # 转换为 NewsItem
-                for item in tavily_results.get("results", []):
-                    news_items.append(NewsItem(
-                        title=item.get("title", ""),
-                        summary=item.get("content", "")[:200],
-                        date=item.get("published_date", ""),
-                        source="Tavily",
-                        url=item.get("url", "")
-                    ))
-            except Exception as e:
-                print(f"[Tavily] 搜索失败: {e}")
+            # 转换为 NewsItem
+            for item in tavily_results.get("results", []):
+                news_items.append(NewsItem(
+                    title=item.get("title", ""),
+                    summary=item.get("content", "")[:200],
+                    date=item.get("published_date", ""),
+                    source="Tavily",
+                    url=item.get("url", "")
+                ))
+        except Exception as e:
+            print(f"[Tavily] 搜索失败（降级为仅 AkShare）: {e}")
 
         # AkShare 新闻转换
         if news_df is not None and not news_df.empty:
@@ -310,14 +311,16 @@ class UnifiedTaskProcessor:
                     url=""
                 ))
 
-        # 情绪分析
+        # 情绪分析（始终使用带链接版本，因为始终有 Tavily）
         sentiment_result = {}
-        if use_tavily and tavily_results.get("count", 0) > 0:
+        if tavily_results.get("count", 0) > 0:
+            # 有 Tavily 结果：使用带链接分析
             sentiment_result = await asyncio.to_thread(
                 self.sentiment_analyzer.analyze_with_links,
                 news_df, tavily_results
             )
         elif news_df is not None and not news_df.empty:
+            # 仅 AkShare：使用原有分析
             sentiment_result = await asyncio.to_thread(
                 self.sentiment_analyzer.analyze, news_df
             )
@@ -409,7 +412,7 @@ class UnifiedTaskProcessor:
 
         session.update_step_detail(2, "completed", "回答生成完成")
 
-    # ========== 新闻流程（2步） ==========
+    # ========== 新闻流程（3步） ==========
 
     async def _execute_news(
         self,
@@ -420,37 +423,110 @@ class UnifiedTaskProcessor:
         """执行新闻搜索流程"""
         from app.news import TavilyNewsClient
 
-        # Step 1: 新闻搜索
-        session.update_step_detail(1, "running", "正在搜索相关新闻...")
+        # Step 1: 解析查询，提取关键词
+        session.update_step_detail(1, "running", "正在解析搜索意图...")
 
         try:
-            tavily_client = TavilyNewsClient(settings.tavily_api_key)
-            search_results = await asyncio.to_thread(
-                tavily_client.search,
-                query=user_input,
-                days=30,
-                max_results=10
+            # 使用 LLM 提取关键词
+            keyword_result = await asyncio.to_thread(
+                self.intent_agent.extract_search_keywords,
+                user_input
             )
+            keywords = keyword_result.get("keywords", user_input)
+            is_stock = keyword_result.get("is_stock", False)
+            stock_name = keyword_result.get("stock_name", "")
+            stock_code = keyword_result.get("stock_code", "")
 
-            # 转换为 NewsItem
-            news_items = [
-                NewsItem(
+            print(f"[News] 关键词提取: keywords={keywords}, is_stock={is_stock}, stock_name={stock_name}, stock_code={stock_code}")
+
+            session.update_step_detail(1, "completed", f"关键词: {keywords}")
+
+            # Step 2: 新闻搜索
+            session.update_step_detail(2, "running", "正在搜索相关新闻...")
+
+            tavily_client = TavilyNewsClient(settings.tavily_api_key)
+            tavily_results = {"results": [], "count": 0}
+            akshare_news_df = None
+            news_items = []
+
+            # 根据是否股票相关选择数据源
+            if is_stock and stock_code:
+                # 股票相关：使用 AkShare + Tavily
+                print(f"[News] 股票搜索模式: AkShare + Tavily")
+
+                akshare_news_df = await asyncio.to_thread(DataFetcher.fetch_news, stock_code, 50)
+                tavily_results = await asyncio.to_thread(
+                    tavily_client.search_stock_news,
+                    stock_name=stock_name or keywords,
+                    days=30,
+                    max_results=10
+                )
+
+                # AkShare 新闻转换
+                if akshare_news_df is not None and not akshare_news_df.empty:
+                    for _, row in akshare_news_df.head(10).iterrows():
+                        news_items.append(NewsItem(
+                            title=row.get("新闻标题", ""),
+                            summary=row.get("新闻内容", "")[:200] if row.get("新闻内容") else "",
+                            date=str(row.get("发布时间", "")),
+                            source="AkShare",
+                            url=""
+                        ))
+            else:
+                # 非股票：仅 Tavily（使用中文域名过滤）
+                print(f"[News] 通用搜索模式: Tavily only")
+                tavily_results = await asyncio.to_thread(
+                    tavily_client.search_stock_news,
+                    stock_name=keywords,
+                    days=30,
+                    max_results=10
+                )
+
+            # Tavily 新闻转换
+            for item in tavily_results.get("results", []):
+                news_items.append(NewsItem(
                     title=item.get("title", ""),
                     summary=item.get("content", "")[:200],
                     date=item.get("published_date", ""),
                     source="Tavily",
                     url=item.get("url", "")
-                )
-                for item in search_results.get("results", [])
-            ]
+                ))
+
             session.save_news(news_items)
 
-            session.update_step_detail(1, "completed", f"找到 {search_results['count']} 条相关新闻")
+            akshare_count = len(akshare_news_df) if akshare_news_df is not None and not akshare_news_df.empty else 0
+            tavily_count = tavily_results.get("count", 0)
+            total_count = akshare_count + tavily_count
 
-            # Step 2: 新闻总结
-            session.update_step_detail(2, "running", "生成新闻摘要...")
+            print(f"[News] 找到新闻: AkShare={akshare_count}, Tavily={tavily_count}, 总计={total_count}")
 
-            news_context = tavily_client.format_results_for_llm(search_results)
+            session.update_step_detail(2, "completed", f"找到 {total_count} 条相关新闻")
+
+            # Step 3: 新闻总结
+            session.update_step_detail(3, "running", "生成新闻摘要...")
+
+            # 构建综合新闻上下文
+            news_context_parts = []
+
+            # AkShare 新闻（无 URL）
+            if akshare_news_df is not None and not akshare_news_df.empty:
+                news_context_parts.append("=== 即时新闻（AkShare）===")
+                for _, row in akshare_news_df.head(15).iterrows():
+                    title = row.get("新闻标题", row.get("标题", ""))
+                    content = str(row.get("新闻内容", row.get("内容", "")))[:100]
+                    if title:
+                        news_context_parts.append(f"- {title}: {content}")
+
+            # Tavily 新闻（有 URL）
+            if tavily_results.get("results"):
+                news_context_parts.append("\n=== 网络新闻（Tavily，带URL）===")
+                for item in tavily_results["results"]:
+                    title = item.get("title", "")
+                    url = item.get("url", "")
+                    content = item.get("content", "")[:100]
+                    news_context_parts.append(f"- 【{title}】({url}): {content}")
+
+            news_context = "\n".join(news_context_parts) if news_context_parts else "未找到相关新闻。"
 
             # 流式生成转为同步
             full_answer = ""
@@ -458,7 +534,7 @@ class UnifiedTaskProcessor:
                 full_answer += chunk
 
             session.save_conclusion(full_answer)
-            session.update_step_detail(2, "completed", "总结完成")
+            session.update_step_detail(3, "completed", "总结完成")
 
         except ValueError as e:
             session.update_step_detail(1, "error", f"新闻搜索服务未配置: {str(e)}")
