@@ -55,4 +55,4 @@ energy_reports_test/
 huggingface/
 
 # Qdrant storage
-qdrant_storage/
+# qdrant_storage/
