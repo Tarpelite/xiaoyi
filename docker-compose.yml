@@ -1,4 +1,23 @@
 services:
+  # ===== Redis 服务 =====
+  redis:
+    image: redis:7-alpine
+    container_name: xiaoyi-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - xiaoyi-network
+
   # ===== 前端服务 =====
   frontend:
     build:
@@ -29,7 +48,13 @@ services:
       - "18000:8000"
     environment:
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
       - TZ=Asia/Shanghai
+    depends_on:
+      redis:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 30s
@@ -42,3 +67,6 @@ services:
 networks:
   xiaoyi-network:
     driver: bridge
+
+volumes:
+  redis_data:
