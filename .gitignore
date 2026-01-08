@@ -47,12 +47,12 @@ coverage/
 # Data files
 *.pdf
 *.zip
-energy_reports/
-energy_reports_test/
+# energy_reports/
+# energy_reports_test/
 
 # Model cache
 .cache/
 huggingface/
 
 # Qdrant storage
-# qdrant_storage/
+qdrant_storage/
