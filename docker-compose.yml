@@ -44,6 +44,8 @@ services:
       - TZ=Asia/Shanghai
       - QDRANT_HOST=qdrant
       - QDRANT_PORT=6333
+      - HF_ENDPOINT=https://hf-mirror.com
+      - HF_TOKEN=${HF_TOKEN}
     volumes:
       - ./energy_reports_test:/app/energy_reports_test
     depends_on:
