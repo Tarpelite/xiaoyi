@@ -156,7 +156,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
             {(() => {
               const contents = message.contents || (message.content ? [message.content] : [])
               const hasContents = contents.length > 0
-              
+
               // 如果没有contents但有text，转换为text content
               if (!hasContents && displayText) {
                 contents.push({ type: 'text', text: displayText })
@@ -178,15 +178,15 @@ export function MessageBubble({ message }: MessageBubbleProps) {
                 const charts = contents.filter(c => c.type === 'chart')
                 const tables = contents.filter(c => c.type === 'table')
                 const texts = contents.filter(c => c.type === 'text')
-                
+
                 // 识别市场情绪内容（特殊标记）
-                const emotionText = texts.find(t => 
+                const emotionText = texts.find(t =>
                   t.type === 'text' && t.text.startsWith('__EMOTION_MARKER__')
                 )
 
                 // 判断是否是简单问答：只有文本内容，没有图表、表格、情绪标记
-                const isSimpleAnswer = charts.length === 0 && 
-                  tables.length === 0 && 
+                const isSimpleAnswer = charts.length === 0 &&
+                  tables.length === 0 &&
                   !emotionText &&
                   texts.length > 0 &&
                   texts.every(t => !t.text.startsWith('__EMOTION_MARKER__'))
@@ -202,14 +202,54 @@ export function MessageBubble({ message }: MessageBubbleProps) {
                   )
                 }
 
+                // 🎯 对话模式：数据获取失败，只显示对话气泡
+                if (message.isConversationalMode && texts.length > 0) {
+                  return (
+                    <div className="max-w-3xl animate-fade-in">
+                      <div className="glass rounded-2xl p-6">
+                        <div className="flex items-start gap-4">
+                          <div className="w-12 h-12 bg-gradient-to-br from-blue-500 to-blue-600 rounded-full flex items-center justify-center flex-shrink-0 shadow-lg">
+                            <span className="text-2xl">🤖</span>
+                          </div>
+                          <div className="flex-1">
+                            <h3 className="text-lg font-bold text-gray-100 mb-3 flex items-center gap-2">
+                              小易助手
+                              <span className="text-xs bg-blue-500/20 text-blue-300 px-2 py-1 rounded-full font-medium border border-blue-500/30">
+                                智能助理
+                              </span>
+                            </h3>
+                            <div className="text-gray-300 leading-relaxed">
+                              {texts.map((content, index) => (
+                                <MessageContent key={index} content={content} />
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Tips */}
+                      <div className="mt-4 bg-blue-500/10 rounded-xl p-4 border border-blue-500/20">
+                        <h4 className="font-semibold text-blue-300 mb-2 flex items-center gap-2">
+                          💡 使用建议
+                        </h4>
+                        <ul className="text-sm text-blue-200/80 space-y-1">
+                          <li>• 确认股票代码格式正确（A股为6位数字）</li>
+                          <li>• 可以尝试使用公司名称，如"贵州茅台"</li>
+                          <li>• 热门股票示例：600519（茅台）、000001（平安银行）</li>
+                        </ul>
+                      </div>
+                    </div>
+                  )
+                }
+
                 // 结构化回答：有图表、表格或情绪数据
                 // 识别综合分析报告（通常是最后一个文本内容，且不是情绪标记）
-                const reportText = texts.filter(t => 
+                const reportText = texts.filter(t =>
                   t.type === 'text' && !t.text.startsWith('__EMOTION_MARKER__')
                 ).pop() // 取最后一个文本作为报告
 
                 // 识别价格预测趋势图（标题包含"预测"）
-                const priceChart = charts.find(c => 
+                const priceChart = charts.find(c =>
                   c.type === 'chart' && (
                     c.title?.includes('预测') ||
                     c.data.datasets.some(d => d.label?.includes('预测'))
@@ -217,9 +257,9 @@ export function MessageBubble({ message }: MessageBubbleProps) {
                 )
 
                 // 识别新闻表格
-                const newsTable = tables.find(t => 
+                const newsTable = tables.find(t =>
                   t.type === 'table' && (
-                    t.title?.includes('新闻') || 
+                    t.title?.includes('新闻') ||
                     t.headers.some(h => h.includes('新闻') || h.includes('标题'))
                   )
                 ) || tables[0]
@@ -238,7 +278,10 @@ export function MessageBubble({ message }: MessageBubbleProps) {
                 }
 
                 return (
-                  <div className="space-y-4">
+                  <div className={cn(
+                    "space-y-4",
+                    message.isCollapsing && "animate-collapse"
+                  )}>
                     {/* 四个结构化部分 */}
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                       {/* 市场情绪区域（左侧上方） */}
@@ -341,7 +384,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
           isUser ? "justify-end" : "justify-start"
         )}>
           <span className="text-[10px] text-gray-600">{message.timestamp}</span>
-          
+
           {/* AI 消息的操作按钮 */}
           {!isUser && (
             <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -367,7 +410,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
 // 操作按钮组件
 function ActionButton({ icon, title }: { icon: React.ReactNode; title: string }) {
   return (
-    <button 
+    <button
       className="p-1 hover:bg-dark-600 rounded transition-colors text-gray-500 hover:text-gray-300"
       title={title}
     >

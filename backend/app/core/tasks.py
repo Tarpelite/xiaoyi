@@ -17,7 +17,9 @@ from app.schemas.session_schema import TimeSeriesPoint, SessionStatus
 from app.agents.nlp_agent import NLPAgent
 from app.agents.report_agent import ReportAgent
 from app.agents.feature_agents import NewsAgent, EmotionAnalyzer
+from app.agents.error_explainer import ErrorExplainerAgent
 from app.data import DataFetcher
+from app.data.fetcher import DataFetchError
 from app.models import TimeSeriesAnalyzer, ProphetForecaster, XGBoostForecaster, RandomForestForecaster, DLinearForecaster
 
 
@@ -30,6 +32,7 @@ class AnalysisTask:
         self.report_agent = ReportAgent(api_key)
         self.news_agent = NewsAgent(api_key)
         self.emotion_analyzer = EmotionAnalyzer(api_key)
+        self.error_explainer = ErrorExplainerAgent(api_key)
     
     async def execute(self, session_id: str, user_input: str, model_name: str):
         """
@@ -58,8 +61,38 @@ class AnalysisTask:
             
             # Step 2: 获取数据
             session.update_step(2)
-            raw_df = await asyncio.to_thread(DataFetcher.fetch, data_config)
-            df = await asyncio.to_thread(DataFetcher.prepare, raw_df, data_config)
+            try:
+                raw_df = await asyncio.to_thread(DataFetcher.fetch, data_config)
+                df = await asyncio.to_thread(DataFetcher.prepare, raw_df, data_config)
+                
+            except DataFetchError as e:
+                # 数据获取失败 - 切换到对话模式
+                print(f"\n{'⚠️ '*20}")
+                print(f"数据获取失败: {e.error_type}")
+                print(f"股票代码: {e.context.get('symbol')}")
+                print(f"{'⚠️ '*20}\n")
+                
+                # 使用 AI 生成友好解释
+                print("🤖 生成友好解释...")
+                explanation = await asyncio.to_thread(
+                    self.error_explainer.explain_data_fetch_error,
+                    e,
+                    user_input
+                )
+                
+                # 更新 session - 切换到对话模式
+                data = session.get()
+                if data:
+                    data.is_time_series = False  # 标记为对话模式
+                    data.error_type = "data_fetch_failed"
+                    data.conversational_response = explanation
+                    data.status = SessionStatus.COMPLETED
+                    data.steps = 2  # 在第2步失败
+                    session._save(data)
+                
+                print(f"✅ 已切换到对话模式，生成了 {len(explanation)} 字解释\n")
+                print(f"{'='*60}\n")
+                return  # 提前结束流程
             
             # 保存原始时序数据
             original_points = self._df_to_points(df, is_prediction=False)

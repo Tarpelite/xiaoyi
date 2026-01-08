@@ -72,6 +72,10 @@ class AnalysisSession(BaseModel):
     # 综合报告
     conclusion: str = ""
     
+    # 对话模式（数据获取失败时）
+    conversational_response: str = ""  # AI生成的对话回复
+    error_type: Optional[str] = None  # "data_fetch_failed" 等
+    
     # 元数据
     created_at: str
     updated_at: str

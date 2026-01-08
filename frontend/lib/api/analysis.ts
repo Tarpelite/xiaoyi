@@ -54,6 +54,10 @@ export interface AnalysisSessionData {
 
   conclusion: string
 
+  // 对话模式（数据获取失败时）
+  conversational_response: string
+  error_type: string | null
+
   created_at: string
   updated_at: string
   error_message: string | null
@@ -82,7 +86,7 @@ export async function createAnalysisTask(
 ): Promise<{ session_id: string; status: string; intent?: string }> {
   // 如果有 sessionId，将其添加到 context 中
   const contextWithSession = sessionId ? `session_id:${sessionId}` : context
-  
+
   const response = await fetch(`${API_BASE_URL}/api/analysis/create`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

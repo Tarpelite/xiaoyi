@@ -92,6 +92,9 @@ export interface Message {
       anomalies: { date: string; change: number }[]
     }
   }
+  // 对话模式标志
+  isConversationalMode?: boolean
+  isCollapsing?: boolean
 }
 
 // 预测步骤定义（7个步骤）- 与后端 STEPS 保持一致
@@ -116,12 +119,12 @@ const defaultQuickSuggestions = [
 // 从 localStorage 获取或生成 session_id
 function getOrCreateSessionId(): string {
   if (typeof window === 'undefined') return ''
-  
+
   const stored = localStorage.getItem('chat_session_id')
   if (stored) {
     return stored
   }
-  
+
   // 生成新的 session_id
   const newSessionId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
   localStorage.setItem('chat_session_id', newSessionId)
@@ -137,6 +140,10 @@ export function ChatArea() {
   const [quickSuggestions, setQuickSuggestions] = useState<string[]>(defaultQuickSuggestions)
   const [tools, setTools] = useState<ToolSettings>(DEFAULT_TOOL_SETTINGS)
   const [isSettingsExpanded, setIsSettingsExpanded] = useState(false)
+
+  // 对话模式动画状态 (针对最后一条消息)
+  const [lastMessageConversationalMode, setLastMessageConversationalMode] = useState(false)
+  const [lastMessageCollapsing, setLastMessageCollapsing] = useState(false)
 
   // 对话区域滚动容器 ref
   const chatContainerRef = useRef<HTMLDivElement>(null)
@@ -156,10 +163,45 @@ export function ChatArea() {
     scrollToBottom()
   }, [messages])
 
+  // 检测对话模式并触发坍缩动画
+  useEffect(() => {
+    if (messages.length === 0) return
+
+    const lastMessage = messages[messages.length - 1]
+    if (lastMessage.role !== 'assistant') return
+
+    // 检查最后一条助手消息的内容
+    const lastContent = lastMessage.contents?.[0]
+    const messageText = lastContent?.type === 'text' ? lastContent.text : ''
+
+    // 通过检查消息开头判断是否是对话模式（conversational_response）
+    // 实际应该通过 data 字段，但消息中没有保存原始 data
+    // 所以我们检测：如果只有文本且包含"抱歉"等关键词
+    const looksLikeConversational =
+      lastMessage.contents?.length === 1 &&
+      lastContent?.type === 'text' &&
+      (messageText.includes('抱歉') || messageText.includes('无法获取') || messageText.includes('数据不存在'))
+
+    if (looksLikeConversational && !lastMessage.steps) {
+      // 可能是对话模式，触发坍缩
+      if (!lastMessageConversationalMode) {
+        setLastMessageCollapsing(true)
+        setTimeout(() => {
+          setLastMessageConversationalMode(true)
+          setLastMessageCollapsing(false)
+        }, 800)
+      }
+    } else {
+      // 重置状态
+      setLastMessageConversationalMode(false)
+      setLastMessageCollapsing(false)
+    }
+  }, [messages])
+
   // 构建对话历史（从 messages 中提取）
   const buildHistory = (): Array<{ role: string; content: string }> => {
     const history: Array<{ role: string; content: string }> = []
-    
+
     for (const msg of messages) {
       if (msg.role === 'user' && msg.text) {
         history.push({ role: 'user', content: msg.text })
@@ -172,7 +214,7 @@ export function ChatArea() {
         }
       }
     }
-    
+
     return history
   }
 
@@ -228,14 +270,25 @@ export function ChatArea() {
       emotion_des?: string | null
       news_list?: Array<{ title: string; summary: string; date: string; source: string }>
       conclusion?: string
+      is_time_series?: boolean
+      conversational_response?: string
     },
     currentStep: number = 0,
     status: string = 'pending'
   ): (TextContent | ChartContent | TableContent)[] => {
     const contents: (TextContent | ChartContent | TableContent)[] = []
 
+    // 🎯 对话模式：数据获取失败，显示 AI 友好解释
+    if (data.is_time_series === false && data.conversational_response) {
+      contents.push({
+        type: 'text',
+        text: data.conversational_response
+      })
+      return contents
+    }
+
     // 判断是否是简单问答：只有 conclusion，没有其他结构化数据
-    const isSimpleAnswer = data.conclusion && 
+    const isSimpleAnswer = data.conclusion &&
       (!data.time_series_full || data.time_series_full.length === 0) &&
       (!data.emotion || data.emotion === null) &&
       (!data.news_list || data.news_list.length === 0)
@@ -295,10 +348,10 @@ export function ChatArea() {
     if ((currentStep >= 6 || isCompleted) && data.time_series_full && data.time_series_full.length > 0 && data.prediction_done) {
       const originalLength = data.time_series_original?.length || 0
       const allLabels = data.time_series_full.map((p) => p.date)
-      const historicalData = data.time_series_full.map((p, idx) => 
+      const historicalData = data.time_series_full.map((p, idx) =>
         idx < originalLength ? p.value : null
       )
-      const forecastData = data.time_series_full.map((p, idx) => 
+      const forecastData = data.time_series_full.map((p, idx) =>
         idx >= originalLength ? p.value : null
       )
 
@@ -351,7 +404,7 @@ export function ChatArea() {
       }
       setMessages((prev: Message[]) => [...prev, userMessage])
       setInputValue('')
-      
+
       const assistantMessage: Message = {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
@@ -409,13 +462,13 @@ export function ChatArea() {
         setMessages((prev: Message[]) => prev.map((msg: Message) =>
           msg.id === assistantMessageId
             ? {
-                ...msg,
-                contents: [{
-                  type: 'text',
-                  text: data.conclusion || '已收到回答'
-                }],
-                steps: undefined
-              }
+              ...msg,
+              contents: [{
+                type: 'text',
+                text: data.conclusion || '已收到回答'
+              }],
+              steps: undefined
+            }
             : msg
         ))
       } else {
@@ -426,8 +479,8 @@ export function ChatArea() {
             const { data, steps: currentStep, status } = statusResponse
 
             // 判断是否是简单问答（只有 conclusion，没有其他结构化数据）
-            const isSimpleAnswer = status === 'completed' && 
-              data.conclusion && 
+            const isSimpleAnswer = status === 'completed' &&
+              data.conclusion &&
               (!data.time_series_full || data.time_series_full.length === 0) &&
               (!data.emotion || data.emotion === null) &&
               (!data.news_list || data.news_list.length === 0)
@@ -437,13 +490,13 @@ export function ChatArea() {
               setMessages((prev: Message[]) => prev.map((msg: Message) =>
                 msg.id === assistantMessageId
                   ? {
-                      ...msg,
-                      contents: [{
-                        type: 'text',
-                        text: data.conclusion
-                      }],
-                      steps: undefined
-                    }
+                    ...msg,
+                    contents: [{
+                      type: 'text',
+                      text: data.conclusion
+                    }],
+                    steps: undefined
+                  }
                   : msg
               ))
             } else {
@@ -458,10 +511,10 @@ export function ChatArea() {
               setMessages((prev: Message[]) => prev.map((msg: Message) =>
                 msg.id === assistantMessageId
                   ? {
-                      ...msg,
-                      steps: status === 'completed' ? undefined : steps, // 完成后隐藏步骤
-                      contents: contents.length > 0 ? contents : [] // 清空旧内容，避免显示上次的数据
-                    }
+                    ...msg,
+                    steps: status === 'completed' ? undefined : steps, // 完成后隐藏步骤
+                    contents: contents.length > 0 ? contents : [] // 清空旧内容，避免显示上次的数据
+                  }
                   : msg
               ))
             }
@@ -643,7 +696,7 @@ export function ChatArea() {
                 <div className="flex items-center gap-3">
                   {/* 序列预测 */}
                   <button
-                    onClick={() => setTools({...tools, forecast: !tools.forecast})}
+                    onClick={() => setTools({ ...tools, forecast: !tools.forecast })}
                     className={cn(
                       "px-2.5 py-1 rounded-md text-[11px] font-medium transition-all border",
                       tools.forecast
