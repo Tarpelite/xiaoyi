@@ -13,7 +13,10 @@ interface MessageBubbleProps {
 
 // 情绪仪表盘组件
 function EmotionGauge({ emotion, description }: { emotion: number; description: string }) {
-  const rotation = emotion * 90
+  // 将情绪值从 [-1, 1] 映射到角度 [180, 0]（从左侧到右侧）
+  const angle = 180 - (emotion + 1) * 90 // -1 -> 180度, 0 -> 90度, 1 -> 0度
+  const rotation = angle
+  
   const getEmotionColor = (score: number) => {
     if (score > 0.3) return 'text-green-400'
     if (score < -0.3) return 'text-red-400'
@@ -21,50 +24,110 @@ function EmotionGauge({ emotion, description }: { emotion: number; description: 
   }
 
   const getEmotionIcon = (score: number) => {
-    if (score > 0.3) return <TrendingUp className="w-6 h-6" />
-    if (score < -0.3) return <TrendingDown className="w-6 h-6" />
-    return <Minus className="w-6 h-6" />
+    if (score > 0.3) return <TrendingUp className="w-5 h-5" />
+    if (score < -0.3) return <TrendingDown className="w-5 h-5" />
+    return <Minus className="w-5 h-5" />
   }
 
   return (
-    <div className="space-y-4">
-      {/* 仪表盘 */}
-      <div className="relative w-full h-32 mx-auto">
-        <svg className="w-full h-full" viewBox="0 0 200 100">
+    <div className="space-y-5">
+      {/* 仪表盘容器 */}
+      <div className="relative w-full" style={{ height: '140px' }}>
+        <svg 
+          className="w-full h-full" 
+          viewBox="0 0 240 120" 
+          preserveAspectRatio="xMidYMid meet"
+        >
           <defs>
+            {/* 红色渐变（看跌） */}
             <linearGradient id="gaugeRed" x1="0%" y1="0%" x2="100%" y2="0%">
-              <stop offset="0%" stopColor="#dc2626" />
-              <stop offset="100%" stopColor="#f87171" />
+              <stop offset="0%" stopColor="#ef4444" />
+              <stop offset="50%" stopColor="#f87171" />
+              <stop offset="100%" stopColor="#fca5a5" />
             </linearGradient>
+            {/* 绿色渐变（看涨） */}
             <linearGradient id="gaugeGreen" x1="0%" y1="0%" x2="100%" y2="0%">
               <stop offset="0%" stopColor="#10b981" />
-              <stop offset="100%" stopColor="#34d399" />
+              <stop offset="50%" stopColor="#34d399" />
+              <stop offset="100%" stopColor="#6ee7b7" />
+            </linearGradient>
+            {/* 中性灰色渐变 */}
+            <linearGradient id="gaugeNeutral" x1="0%" y1="0%" x2="100%" y2="0%">
+              <stop offset="0%" stopColor="#6b7280" />
+              <stop offset="100%" stopColor="#9ca3af" />
             </linearGradient>
           </defs>
 
-          <path d="M 20 80 A 80 80 0 0 1 180 80" fill="none" stroke="#3a3a4a" strokeWidth="20" strokeLinecap="round" />
-          <path d="M 20 80 A 80 80 0 0 1 100 10" fill="none" stroke="url(#gaugeRed)" strokeWidth="20" strokeLinecap="round" opacity="0.4" />
-          <path d="M 100 10 A 80 80 0 0 1 180 80" fill="none" stroke="url(#gaugeGreen)" strokeWidth="20" strokeLinecap="round" opacity="0.4" />
+          {/* 背景轨道（完整半圆） */}
+          <path 
+            d="M 30 100 A 90 90 0 0 1 210 100" 
+            fill="none" 
+            stroke="#2a2a38" 
+            strokeWidth="16" 
+            strokeLinecap="round"
+          />
+          
+          {/* 左侧红色区域（看跌：180度到90度） */}
+          <path 
+            d="M 30 100 A 90 90 0 0 1 120 20" 
+            fill="none" 
+            stroke="url(#gaugeRed)" 
+            strokeWidth="16" 
+            strokeLinecap="round"
+            opacity="0.6"
+          />
+          
+          {/* 右侧绿色区域（看涨：90度到0度） */}
+          <path 
+            d="M 120 20 A 90 90 0 0 1 210 100" 
+            fill="none" 
+            stroke="url(#gaugeGreen)" 
+            strokeWidth="16" 
+            strokeLinecap="round"
+            opacity="0.6"
+          />
 
-          <line x1="100" y1="80" x2="100" y2="25" stroke="#9ca3af" strokeWidth="3" strokeLinecap="round"
-            transform={`rotate(${rotation} 100 80)`} className="transition-transform duration-1000" />
-          <circle cx="100" cy="80" r="8" fill="#9ca3af" />
+          {/* 指针 */}
+          <g transform={`rotate(${rotation} 120 100)`}>
+            <line 
+              x1="120" 
+              y1="100" 
+              x2="120" 
+              y2="30" 
+              stroke="#e5e7eb" 
+              strokeWidth="3" 
+              strokeLinecap="round"
+              className="transition-transform duration-1000 ease-out"
+            />
+            <circle 
+              cx="120" 
+              cy="100" 
+              r="6" 
+              fill="#e5e7eb"
+              className="transition-transform duration-1000 ease-out"
+            />
+          </g>
         </svg>
 
-        <div className="absolute top-0 left-0 text-[10px] font-bold text-red-400">极度看跌</div>
-        <div className="absolute top-0 right-0 text-[10px] font-bold text-green-400">极度看涨</div>
+        {/* 标签文字 - 与仪表盘对齐 */}
+        <div className="absolute" style={{ top: '8px', left: '8px' }}>
+          <span className="text-xs font-semibold text-red-400">极度看跌</span>
+        </div>
+        <div className="absolute" style={{ top: '8px', right: '8px' }}>
+          <span className="text-xs font-semibold text-green-400">极度看涨</span>
+        </div>
       </div>
 
-      {/* 情绪值 */}
-      <div className="text-center space-y-2">
-        <div className={`flex items-center justify-center gap-2 ${getEmotionColor(emotion)}`}>
+      {/* 情绪值显示 */}
+      <div className="text-center space-y-3">
+        <div className={`flex items-center justify-center gap-2.5 ${getEmotionColor(emotion)}`}>
           {getEmotionIcon(emotion)}
-          <span className="text-3xl font-bold">
+          <span className="text-2xl font-bold tracking-tight">
             {emotion > 0 ? '+' : ''}{emotion.toFixed(2)}
           </span>
         </div>
         {description && (
-          <div className="bg-dark-700/50 rounded-lg p-3">
+          <div className="bg-dark-700/40 rounded-lg px-4 py-2.5 border border-white/5">
             <p className="text-xs text-gray-300 leading-relaxed">{description}</p>
           </div>
         )}
@@ -173,7 +236,10 @@ export function MessageBubble({ message }: MessageBubbleProps) {
                 )
               }
 
-              if (hasContents || displayText) {
+              // 如果有步骤进度条，或者有结构化内容，显示四个结构化部分
+              const hasSteps = message.steps && message.steps.length > 0
+              
+              if (hasContents || displayText || hasSteps) {
                 // 分类内容：图表、表格、文本
                 const charts = contents.filter(c => c.type === 'chart')
                 const tables = contents.filter(c => c.type === 'table')
@@ -184,8 +250,9 @@ export function MessageBubble({ message }: MessageBubbleProps) {
                   t.type === 'text' && t.text.startsWith('__EMOTION_MARKER__')
                 )
 
-                // 判断是否是简单问答：只有文本内容，没有图表、表格、情绪标记
-                const isSimpleAnswer = charts.length === 0 &&
+                // 判断是否是简单问答：只有文本内容，没有图表、表格、情绪标记，且没有步骤进度条
+                const isSimpleAnswer = !hasSteps &&
+                  charts.length === 0 &&
                   tables.length === 0 &&
                   !emotionText &&
                   texts.length > 0 &&
@@ -292,7 +359,10 @@ export function MessageBubble({ message }: MessageBubbleProps) {
                         {emotionData ? (
                           <EmotionGauge emotion={emotionData.score} description={emotionData.description} />
                         ) : (
-                          <div className="text-sm text-gray-400">情绪分析中...</div>
+                          <div className="text-sm text-gray-400 flex items-center gap-2">
+                            <div className="w-2 h-2 bg-violet-400 rounded-full animate-pulse" />
+                            <span>情绪分析中...</span>
+                          </div>
                         )}
                       </div>
 
@@ -304,52 +374,43 @@ export function MessageBubble({ message }: MessageBubbleProps) {
                         {newsTable ? (
                           <MessageContent content={newsTable} />
                         ) : (
-                          <div className="text-sm text-gray-400">暂无新闻数据</div>
+                          <div className="text-sm text-gray-400 flex items-center gap-2">
+                            <div className="w-2 h-2 bg-violet-400 rounded-full animate-pulse" />
+                            <span>正在获取新闻...</span>
+                          </div>
                         )}
                       </div>
                     </div>
 
                     {/* 价格预测趋势图（全宽） */}
-                    {priceChart ? (
-                      <div className="glass rounded-2xl p-4">
-                        <h3 className="text-sm font-semibold text-gray-300 mb-3 flex items-center gap-2">
-                          <span>📈</span> 价格走势分析
-                        </h3>
+                    <div className="glass rounded-2xl p-4">
+                      <h3 className="text-sm font-semibold text-gray-300 mb-3 flex items-center gap-2">
+                        <span>📈</span> 价格走势分析
+                      </h3>
+                      {priceChart ? (
                         <MessageContent content={priceChart} />
-                      </div>
-                    ) : (
-                      // 如果图表未生成，显示加载状态
-                      <div className="glass rounded-2xl p-4">
-                        <h3 className="text-sm font-semibold text-gray-300 mb-3 flex items-center gap-2">
-                          <span>📈</span> 价格走势分析
-                        </h3>
+                      ) : (
                         <div className="text-sm text-gray-400 flex items-center gap-2 h-64 items-center justify-center">
                           <div className="w-2 h-2 bg-violet-400 rounded-full animate-pulse" />
                           <span>正在生成预测图表...</span>
                         </div>
-                      </div>
-                    )}
+                      )}
+                    </div>
 
                     {/* 综合分析报告（全宽，最后） */}
-                    {reportText ? (
-                      <div className="glass rounded-2xl p-4">
-                        <h3 className="text-sm font-semibold text-gray-300 mb-3 flex items-center gap-2">
-                          <span>📝</span> 综合分析报告
-                        </h3>
+                    <div className="glass rounded-2xl p-4">
+                      <h3 className="text-sm font-semibold text-gray-300 mb-3 flex items-center gap-2">
+                        <span>📝</span> 综合分析报告
+                      </h3>
+                      {reportText ? (
                         <MessageContent content={reportText} />
-                      </div>
-                    ) : (
-                      // 如果报告未生成，显示加载状态
-                      <div className="glass rounded-2xl p-4">
-                        <h3 className="text-sm font-semibold text-gray-300 mb-3 flex items-center gap-2">
-                          <span>📝</span> 综合分析报告
-                        </h3>
+                      ) : (
                         <div className="text-sm text-gray-400 flex items-center gap-2">
                           <div className="w-2 h-2 bg-violet-400 rounded-full animate-pulse" />
                           <span>正在生成分析报告...</span>
                         </div>
-                      </div>
-                    )}
+                      )}
+                    </div>
 
                     {/* 其他未分类的内容（向后兼容） */}
                     {contents.filter(c => {

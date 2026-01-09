@@ -10,11 +10,11 @@ interface StepProgressProps {
 
 export function StepProgress({ steps }: StepProgressProps) {
   return (
-    <div className="flex items-center justify-between gap-2 py-2">
+    <div className="flex items-start justify-between gap-1 py-2">
       {steps.map((step, index) => (
-        <div key={step.id} className="flex items-center flex-1">
+        <div key={step.id} className="flex items-center flex-1 min-w-0">
           {/* 步骤节点 */}
-          <div className="flex flex-col items-center flex-1">
+          <div className="flex flex-col items-center flex-1 min-w-0">
             {/* 步骤图标 */}
             <div className="flex-shrink-0 relative">
               {step.status === 'completed' && (
@@ -40,14 +40,16 @@ export function StepProgress({ steps }: StepProgressProps) {
             </div>
 
             {/* 步骤名称 */}
-            <div className="mt-2 text-center">
+            <div className="mt-2 text-center w-full">
               <div className={cn(
-                "text-xs font-medium",
+                "text-xs font-medium whitespace-nowrap overflow-hidden text-ellipsis",
                 step.status === 'completed' && "text-green-400",
                 step.status === 'running' && "text-violet-400",
                 step.status === 'failed' && "text-red-400",
                 step.status === 'pending' && "text-gray-500"
-              )}>
+              )}
+              title={step.name} // 鼠标悬停显示完整标题
+              >
                 {step.name}
               </div>
             </div>

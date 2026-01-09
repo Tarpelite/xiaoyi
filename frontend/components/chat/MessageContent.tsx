@@ -2,8 +2,9 @@
 
 import { useState, useMemo, useRef, useCallback, useEffect } from 'react'
 import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts'
-import { RotateCcw, Move, ExternalLink } from 'lucide-react'
+import { RotateCcw, Move } from 'lucide-react'
 import type { TextContent, ChartContent, TableContent } from './ChatArea'
 
 interface MessageContentProps {
@@ -15,26 +16,88 @@ export function MessageContent({ content }: MessageContentProps) {
     return (
       <div className="prose prose-invert max-w-none">
         <ReactMarkdown
+          remarkPlugins={[remarkGfm]}
           components={{
+            // 标题
+            h1: ({ children }) => <h1 className="text-2xl font-bold text-gray-200 mb-3 mt-4 first:mt-0">{children}</h1>,
+            h2: ({ children }) => <h2 className="text-xl font-bold text-gray-200 mb-2 mt-4 first:mt-0">{children}</h2>,
+            h3: ({ children }) => <h3 className="text-lg font-semibold text-gray-200 mb-2 mt-3 first:mt-0">{children}</h3>,
+            h4: ({ children }) => <h4 className="text-base font-semibold text-gray-200 mb-2 mt-3 first:mt-0">{children}</h4>,
+            h5: ({ children }) => <h5 className="text-sm font-semibold text-gray-200 mb-1 mt-2 first:mt-0">{children}</h5>,
+            h6: ({ children }) => <h6 className="text-sm font-medium text-gray-300 mb-1 mt-2 first:mt-0">{children}</h6>,
+            // 段落
+            p: ({ children }) => <p className="mb-2 last:mb-0 text-gray-300 leading-relaxed">{children}</p>,
+            // 强调
             strong: ({ children }) => <strong className="font-semibold text-violet-300">{children}</strong>,
-            p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
-            ul: ({ children }) => <ul className="list-disc list-inside mb-2 space-y-1">{children}</ul>,
-            ol: ({ children }) => <ol className="list-decimal list-inside mb-2 space-y-1">{children}</ol>,
+            em: ({ children }) => <em className="italic text-gray-200">{children}</em>,
+            // 列表
+            ul: ({ children }) => <ul className="list-disc list-inside mb-2 space-y-1 text-gray-300">{children}</ul>,
+            ol: ({ children }) => <ol className="list-decimal list-inside mb-2 space-y-1 text-gray-300">{children}</ol>,
             li: ({ children }) => <li className="text-gray-300">{children}</li>,
-            code: ({ children }) => (
-              <code className="px-1.5 py-0.5 bg-dark-600 rounded text-sm text-violet-300">{children}</code>
+            // 代码
+            code: ({ className, children, ...props }: any) => {
+              const isInline = !className
+              return isInline ? (
+                <code className="px-1.5 py-0.5 bg-dark-600 rounded text-sm text-violet-300 font-mono" {...props}>
+                  {children}
+                </code>
+              ) : (
+                <code className="block p-3 bg-dark-700 rounded-lg text-sm text-gray-300 font-mono overflow-x-auto mb-2" {...props}>
+                  {children}
+                </code>
+              )
+            },
+            pre: ({ children }) => (
+              <pre className="bg-dark-700 rounded-lg p-3 overflow-x-auto mb-2">{children}</pre>
             ),
+            // 表格
+            table: ({ children }) => (
+              <div className="overflow-x-auto my-3">
+                <table className="w-full border-collapse border border-white/10">
+                  {children}
+                </table>
+              </div>
+            ),
+            thead: ({ children }) => (
+              <thead className="bg-dark-700/50">{children}</thead>
+            ),
+            tbody: ({ children }) => (
+              <tbody>{children}</tbody>
+            ),
+            tr: ({ children }) => (
+              <tr className="border-b border-white/5 hover:bg-dark-600/30 transition-colors">{children}</tr>
+            ),
+            th: ({ children }) => (
+              <th className="px-4 py-2 text-left text-xs font-medium text-gray-400 uppercase tracking-wider border border-white/10">
+                {children}
+              </th>
+            ),
+            td: ({ children }) => (
+              <td className="px-4 py-2 text-sm text-gray-300 border border-white/5">
+                {children}
+              </td>
+            ),
+            // 链接
             a: ({ href, children }) => (
-              <a
-                href={href}
-                target="_blank"
+              <a 
+                href={href} 
+                target="_blank" 
                 rel="noopener noreferrer"
-                className="inline-flex items-center gap-0.5 text-violet-400 hover:text-violet-300 hover:underline transition-colors"
+                className="text-violet-400 hover:text-violet-300 underline"
               >
                 {children}
-                <ExternalLink className="w-3 h-3 flex-shrink-0" />
               </a>
             ),
+            // 引用
+            blockquote: ({ children }) => (
+              <blockquote className="border-l-4 border-violet-500/50 pl-4 py-2 my-2 bg-dark-700/30 italic text-gray-300">
+                {children}
+              </blockquote>
+            ),
+            // 水平线
+            hr: () => <hr className="my-4 border-white/10" />,
+            // 换行
+            br: () => <br />,
           }}
         >
           {content.text}
@@ -74,14 +137,28 @@ export function MessageContent({ content }: MessageContentProps) {
                 key={rowIndex}
                 className="border-b border-white/5 hover:bg-dark-600/30 transition-colors"
               >
-                {row.map((cell, cellIndex) => (
-                  <td
-                    key={cellIndex}
-                    className="px-4 py-2 text-sm text-gray-300"
-                  >
-                    {typeof cell === 'number' ? cell.toLocaleString() : cell}
-                  </td>
-                ))}
+                {row.map((cell, cellIndex) => {
+                  // 第一列是标题，如果超过25个字则截断
+                  if (cellIndex === 0 && typeof cell === 'string' && cell.length > 25) {
+                    return (
+                      <td
+                        key={cellIndex}
+                        className="px-4 py-2 text-sm text-gray-300"
+                        title={cell} // 鼠标悬停时显示完整标题
+                      >
+                        {cell.substring(0, 25)}...
+                      </td>
+                    )
+                  }
+                  return (
+                    <td
+                      key={cellIndex}
+                      className="px-4 py-2 text-sm text-gray-300"
+                    >
+                      {typeof cell === 'number' ? cell.toLocaleString() : cell}
+                    </td>
+                  )
+                })}
               </tr>
             ))}
           </tbody>
@@ -107,6 +184,47 @@ function InteractiveChart({ content }: { content: ChartContent }) {
       return item
     })
   }, [data])
+
+  // 计算Y轴范围（自适应）- 基于所有数据，保持一致性
+  const yAxisDomain = useMemo(() => {
+    // 收集所有非null的数值
+    const allValues: number[] = []
+    chartData.forEach((item) => {
+      data.datasets.forEach((dataset) => {
+        const value = item[dataset.label]
+        if (value !== null && value !== undefined && typeof value === 'number' && !isNaN(value)) {
+          allValues.push(value)
+        }
+      })
+    })
+
+    if (allValues.length === 0) {
+      return [0, 100] // 默认范围
+    }
+
+    const minValue = Math.min(...allValues)
+    const maxValue = Math.max(...allValues)
+    
+    // 如果所有值相同，添加一些范围
+    if (minValue === maxValue) {
+      const padding = Math.abs(minValue) * 0.1 || 10
+      return [minValue - padding, maxValue + padding]
+    }
+    
+    // 计算范围，留出10%的边距
+    const range = maxValue - minValue
+    const padding = range * 0.1
+    
+    // 确保最小值不为负数（如果所有值都为正）
+    const adjustedMin = minValue >= 0 
+      ? Math.max(0, minValue - padding)
+      : minValue - padding
+    
+    const adjustedMax = maxValue + padding
+
+    // 确保返回的是数字数组，保留合理精度
+    return [Math.round(adjustedMin * 100) / 100, Math.round(adjustedMax * 100) / 100]
+  }, [chartData, data.datasets])
 
   const colors = ['#8b5cf6', '#06b6d4', '#10b981', '#f59e0b', '#ef4444']
 
@@ -255,10 +373,13 @@ function InteractiveChart({ content }: { content: ChartContent }) {
     setViewEndIndex(chartData.length - 1)
   }, [chartData.length])
 
+  // 如果标题包含"预测"，则不显示（因为外层已有"价格走势分析"标题）
+  const shouldShowTitle = title && !title.includes('预测')
+
   return (
     <div className="mt-2">
       <div className="flex items-center justify-between mb-3">
-        {title && (
+        {shouldShowTitle && (
           <h4 className="text-sm font-medium text-gray-300">{title}</h4>
         )}
         <div className="flex items-center gap-2">
@@ -312,6 +433,28 @@ function InteractiveChart({ content }: { content: ChartContent }) {
             <YAxis 
               stroke="#6b7280"
               style={{ fontSize: '12px' }}
+              domain={yAxisDomain}
+              allowDataOverflow={false}
+              tickFormatter={(value) => {
+                // 格式化 Y 轴刻度标签，处理大数值
+                if (isNaN(value) || !isFinite(value)) {
+                  return ''
+                }
+                
+                // 如果数值很大，使用科学计数法或简化显示
+                if (Math.abs(value) >= 100000000) {
+                  return (value / 100000000).toFixed(1) + '亿'
+                } else if (Math.abs(value) >= 10000) {
+                  return (value / 10000).toFixed(1) + '万'
+                } else if (Math.abs(value) >= 1000) {
+                  return (value / 1000).toFixed(1) + 'k'
+                } else if (Math.abs(value) >= 1) {
+                  return value.toFixed(0)
+                } else {
+                  return value.toFixed(2)
+                }
+              }}
+              width={60}
             />
             <Tooltip
               contentStyle={{
