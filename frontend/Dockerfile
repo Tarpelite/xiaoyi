@@ -3,7 +3,7 @@
 # ============================================
 
 # Stage 1: 依赖安装
-FROM node:20-alpine AS deps
+FROM aqtbrodh2awvkc.xuanyuan.run/node:20-alpine AS deps
 
 # 配置 Alpine 使用阿里云镜像
 RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories
@@ -22,7 +22,7 @@ COPY frontend/package.json frontend/pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
 
 # Stage 2: 构建
-FROM node:20-alpine AS builder
+FROM aqtbrodh2awvkc.xuanyuan.run/node:20-alpine AS builder
 WORKDIR /app
 
 RUN corepack enable && corepack prepare pnpm@latest --activate
@@ -41,7 +41,7 @@ ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
 RUN pnpm build
 
 # Stage 3: 生产运行
-FROM node:20-alpine AS runner
+FROM aqtbrodh2awvkc.xuanyuan.run/node:20-alpine AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production
