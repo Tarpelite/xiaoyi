@@ -63,14 +63,28 @@ export function MessageContent({ content }: MessageContentProps) {
                 key={rowIndex}
                 className="border-b border-white/5 hover:bg-dark-600/30 transition-colors"
               >
-                {row.map((cell, cellIndex) => (
-                  <td
-                    key={cellIndex}
-                    className="px-4 py-2 text-sm text-gray-300"
-                  >
-                    {typeof cell === 'number' ? cell.toLocaleString() : cell}
-                  </td>
-                ))}
+                {row.map((cell, cellIndex) => {
+                  // 第一列是标题，如果超过25个字则截断
+                  if (cellIndex === 0 && typeof cell === 'string' && cell.length > 25) {
+                    return (
+                      <td
+                        key={cellIndex}
+                        className="px-4 py-2 text-sm text-gray-300"
+                        title={cell} // 鼠标悬停时显示完整标题
+                      >
+                        {cell.substring(0, 25)}...
+                      </td>
+                    )
+                  }
+                  return (
+                    <td
+                      key={cellIndex}
+                      className="px-4 py-2 text-sm text-gray-300"
+                    >
+                      {typeof cell === 'number' ? cell.toLocaleString() : cell}
+                    </td>
+                  )
+                })}
               </tr>
             ))}
           </tbody>
@@ -95,6 +109,39 @@ function InteractiveChart({ content }: { content: ChartContent }) {
       })
       return item
     })
+  }, [data])
+
+  // 计算Y轴范围（自适应）
+  const yAxisDomain = useMemo(() => {
+    // 收集所有非null的数值
+    const allValues: number[] = []
+    data.datasets.forEach((dataset) => {
+      dataset.data.forEach((value) => {
+        if (value !== null && typeof value === 'number') {
+          allValues.push(value)
+        }
+      })
+    })
+
+    if (allValues.length === 0) {
+      return [0, 100] // 默认范围
+    }
+
+    const minValue = Math.min(...allValues)
+    const maxValue = Math.max(...allValues)
+    
+    // 计算范围，留出10%的边距
+    const range = maxValue - minValue
+    const padding = range * 0.1 || (maxValue * 0.1 || 10)
+    
+    // 确保最小值不为负数（如果所有值都为正）
+    const adjustedMin = minValue >= 0 
+      ? Math.max(0, minValue - padding)
+      : minValue - padding
+    
+    const adjustedMax = maxValue + padding
+
+    return [adjustedMin, adjustedMax]
   }, [data])
 
   const colors = ['#8b5cf6', '#06b6d4', '#10b981', '#f59e0b', '#ef4444']
@@ -244,10 +291,13 @@ function InteractiveChart({ content }: { content: ChartContent }) {
     setViewEndIndex(chartData.length - 1)
   }, [chartData.length])
 
+  // 如果标题包含"预测"，则不显示（因为外层已有"价格走势分析"标题）
+  const shouldShowTitle = title && !title.includes('预测')
+
   return (
     <div className="mt-2">
       <div className="flex items-center justify-between mb-3">
-        {title && (
+        {shouldShowTitle && (
           <h4 className="text-sm font-medium text-gray-300">{title}</h4>
         )}
         <div className="flex items-center gap-2">
@@ -301,6 +351,8 @@ function InteractiveChart({ content }: { content: ChartContent }) {
             <YAxis 
               stroke="#6b7280"
               style={{ fontSize: '12px' }}
+              domain={yAxisDomain}
+              allowDataOverflow={false}
             />
             <Tooltip
               contentStyle={{

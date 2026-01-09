@@ -247,7 +247,7 @@ async function generateResponseContent(message: string): Promise<(TextContent | 
 
   contents.push({
     type: 'chart',
-    title: '价格预测趋势图',
+    title: '', // 标题由外层MessageBubble显示"价格走势分析"，这里不重复显示
     data: {
       labels: allLabels,
       datasets: [

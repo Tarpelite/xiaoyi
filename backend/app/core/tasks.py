@@ -133,7 +133,8 @@ class AnalysisTask:
                 self.report_agent.generate,
                 user_question,
                 features,
-                forecast_result
+                forecast_result,
+                emotion  # 传递情绪分析结果
             )
             session.save_conclusion(report)
             

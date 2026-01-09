@@ -333,7 +333,7 @@ export function ChatArea() {
     if ((currentStep >= 4 || isCompleted) && data.news_list && data.news_list.length > 0) {
       contents.push({
         type: 'table',
-        title: '相关新闻',
+        title: '', // 标题由外层MessageBubble显示"相关新闻"，这里不重复显示
         headers: ['标题', '来源', '日期'],
         rows: data.news_list.slice(0, 5).map((news) => [
           news.title,
@@ -357,7 +357,7 @@ export function ChatArea() {
 
       contents.push({
         type: 'chart',
-        title: '价格预测趋势图',
+        title: '', // 标题由外层MessageBubble显示"价格走势分析"，这里不重复显示
         data: {
           labels: allLabels,
           datasets: [
@@ -564,7 +564,7 @@ export function ChatArea() {
             className="flex-shrink-0"
           />
           <h2 className="text-base font-semibold">
-            {isEmpty ? '股票分析助手' : '股票分析'}
+            小易猜猜
           </h2>
           {!isEmpty && isLoading && (
             <div className="flex items-center gap-2">

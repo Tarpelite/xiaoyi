@@ -54,27 +54,40 @@ class ReportAgent:
         except (ValueError, TypeError, KeyError):
             short_term_change = long_term_change = st_pct = lt_pct = 0
         
-        # 2. 构建情绪分析块
+        # 2. 构建情绪分析块（以自然段形式描述，而非要点）
+        # sentiment_result 是 EmotionAnalysis 对象，包含 score 和 description
         sentiment_section = ""
-        if sentiment_result and sentiment_result.get("news_count", 0) > 0:
-            key_events = sentiment_result.get('key_events', [])
-            key_events_str = ', '.join(key_events[:3]) if key_events else '无'
-            # 这里的 overall_score 强制转 float 避免报错
-            score = float(sentiment_result.get('overall_score', 0))
+        if sentiment_result:
+            # EmotionAnalysis 是 Pydantic 模型，直接访问属性
+            score = float(sentiment_result.score)
+            description = sentiment_result.description
+            
+            # 根据分数判断情绪标签
+            if score > 0.6:
+                sentiment_label = "极度看涨"
+            elif score > 0.3:
+                sentiment_label = "偏乐观"
+            elif score > -0.3:
+                sentiment_label = "中性"
+            elif score > -0.6:
+                sentiment_label = "偏悲观"
+            else:
+                sentiment_label = "极度看跌"
             
             sentiment_section = f"""
-情绪分析:
-- 整体情绪: {sentiment_result.get('sentiment', '中性')}
-- 情绪得分: {score:.2f} (-1到1)
-- 关键事件: {key_events_str}
-- 分析说明: {sentiment_result.get('analysis_text', '')}
+## 市场情绪分析
+整体市场情绪为**{sentiment_label}**，情绪得分为{score:.2f}（范围-1到1）。{description}
 """
 
-        system_prompt = """你是资深的金融分析师。你的分析报告需要：
-1. 专业严谨：基于数据和技术指标
-2. 逻辑清晰：层层递进
-3. 风险意识：明确风险点
-4. 实用建议：给出操作方向"""
+        system_prompt = """你是资深的金融分析师。你的任务是生成自然段格式的分析报告，而非要点列表。
+
+**核心要求：**
+1. 使用自然段陈述，语气连贯流畅，避免使用"-"、"•"等列表符号
+2. 将要点式内容改写为连贯的自然段落
+3. 在关键数据、重要结论处使用 **加粗** 标记
+4. 保持专业严谨，基于数据和技术指标
+5. 逻辑清晰，层层递进
+6. 明确风险点，给出实用建议"""
 
         # 3. 构建 Prompt (对 features 中的数值进行 float 强制转换)
         try:
@@ -85,30 +98,53 @@ class ReportAgent:
             prompt = f"""用户问题: {user_question}
 
 ## 数据特征分析
-【基本面信息】
-- 数据时间范围: {features.get('date_range', '未知')}
-- 有效数据点: {features.get('data_points', 0)} 天
-- 价格区间: [{float(features.get('min', 0)):.2f}, {float(features.get('max', 0)):.2f}]
-- 当前价位: {f_latest:.2f} (均值: {f_mean:.2f})
+数据时间范围为{features.get('date_range', '未知')}，共包含{features.get('data_points', 0)}个有效数据点。价格在{float(features.get('min', 0)):.2f}元至{float(features.get('max', 0)):.2f}元区间内波动，当前价位为**{f_latest:.2f}元**，略{'高于' if change_pct > 0 else '低于' if change_pct < 0 else '等于'}均值{f_mean:.2f}元（偏离幅度{abs(change_pct):.2f}%）。
 
-【技术指标】
-- 趋势方向: {features.get('trend', '横盘')}
-- 波动程度: {features.get('volatility', '低')}
-- 变化幅度: {change_pct:.2f}%
+从技术面来看，趋势方向为**{features.get('trend', '横盘')}**，波动程度为**{features.get('volatility', '低')}**，整体呈现出相对稳定的市场特征。
 
 {sentiment_section}
 ## 预测结果
-【模型信息】
-- 模型: {str(forecast_result.get('model', 'unknown')).upper()}
-- 预测精度: MAE={float(forecast_result.get('metrics', {}).get('mae', 0)):.4f}
-- 预测期限: {len(forecast_summary)} 天
+采用**{str(forecast_result.get('model', 'unknown')).upper()}模型**进行预测，模型的历史回测精度为MAE={float(forecast_result.get('metrics', {}).get('mae', 0)):.4f}，预测期限为{len(forecast_summary)}天。
 
-【趋势分析】
-- 短期变化（7天）: {short_term_change:+.2f} ({st_pct:+.2f}%)
-- 长期变化（{len(forecast_summary)}天）: {long_term_change:+.2f} ({lt_pct:+.2f}%)
+根据预测结果，短期（7天）内预计变化为{short_term_change:+.2f}元（{st_pct:+.2f}%），长期（{len(forecast_summary)}天）累计变化为{long_term_change:+.2f}元（{lt_pct:+.2f}%）。
 
 ## 报告要求
-请生成一份完整的 Markdown 格式专业报告。包含：历史走势分析、市场情绪、预测解读、投资建议、风险提示。总字数在500以内。
+
+**重要：请生成自然段格式的报告，不要使用要点列表。**
+
+### 示例（Question + Case）
+
+**问题：** 分析某股票下季度走势
+
+**要点式报告（错误示例）：**
+```
+- 历史走势：价格在100-120区间波动
+- 技术指标：趋势平稳，波动性低
+- 预测结果：预计上涨5%
+- 建议：谨慎乐观
+```
+
+**自然段报告（正确示例）：**
+```
+基于过去一年的数据分析，该股票呈现出**平稳偏弱的震荡格局**，价格在100-120元区间内波动，整体波动性较低，反映出市场情绪相对谨慎。从技术面来看，当前价位处于均值附近，趋势方向为横盘整理，这种低波动状态往往预示着市场正在寻找方向性突破。
+
+根据Prophet模型的预测分析，预计未来90天该股票将呈现**温和上涨趋势**，累计涨幅约**5%**，目标价位在125-130元区间。这一预测基于模型的历史回测表现（MAE=2.5），具有一定的参考价值。然而，考虑到当前市场环境的不确定性，建议投资者采取**谨慎乐观**的态度，可以采取分批建仓的策略，在关键支撑位附近逐步布局，同时保留一定现金仓位以应对可能的回调风险。
+```
+
+### 你的任务
+
+请基于上述数据，生成一份自然段格式的分析报告，包含以下内容（以自然段形式呈现，不要用列表）：
+1. 历史走势与基本面分析（1-2段）
+2. 市场情绪与技术面评估（1段）
+3. 模型预测解读（1-2段）
+4. 投资建议（1段）
+5. 风险提示（1段）
+
+**要求：**
+- 总字数控制在600-800字
+- 使用自然段陈述，语气连贯
+- 关键数据和结论使用 **加粗** 标记
+- 避免使用"-"、"•"、"1."等列表符号
 """
         except (ValueError, TypeError) as e:
             # 如果转换依然失败，回退到无格式模式
