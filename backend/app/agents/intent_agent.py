@@ -1,118 +1,158 @@
 """
-意图判断 Agent 模块
-===================
+统一意图识别 Agent
+==================
 
-判断用户意图：是否需要执行新的数据分析，还是只需要回答问题
+一次 LLM 调用返回所有意图信息:
+- is_in_scope: 是否在服务范围内 (金融/股票相关)
+- is_forecast: 是否需要预测分析
+- 工具开关: enable_rag, enable_search, enable_domain_info
+- stock_mention: 提及的股票
+- raw_*_keywords: 初步关键词 (股票匹配后优化)
+- 预测参数: forecast_model, history_days, forecast_horizon
 """
 
 from typing import Dict, Any, List, Optional, Generator
+import json
 from openai import OpenAI
+
+from app.schemas.session_schema import UnifiedIntent, ResolvedKeywords
 
 
 class IntentAgent:
-    """意图判断 Agent"""
-    
-    def __init__(self, api_key: str):
+    """统一意图识别 Agent"""
+
+    def __init__(self, api_key: str, base_url: str = "https://api.deepseek.com"):
         """
         初始化 Intent Agent
-        
+
         Args:
-            api_key: DeepSeek API Key
+            api_key: API Key
+            base_url: API Base URL
         """
         self.client = OpenAI(
             api_key=api_key,
-            base_url="https://api.deepseek.com"
+            base_url=base_url
         )
-    
-    def judge_intent(
-        self, 
-        user_query: str, 
+
+    def recognize_intent(
+        self,
+        user_query: str,
         conversation_history: Optional[List[Dict[str, str]]] = None
-    ) -> Dict[str, Any]:
+    ) -> UnifiedIntent:
         """
-        判断用户意图
-        
+        统一意图识别
+
+        一次 LLM 调用返回所有意图信息
+
         Args:
-            user_query: 用户当前问题
+            user_query: 用户问题
             conversation_history: 对话历史
-            
+
         Returns:
-            包含 intent 和 reason 的字典
-            intent: "analyze" (需要执行新分析) 或 "answer" (只需要回答问题)
+            UnifiedIntent 对象
         """
-        system_prompt = """你是意图判断助手。根据用户问题和对话历史，判断用户意图、需要的功能、模型和时间窗口参数。
+        system_prompt = """你是金融时序分析助手的意图识别模块。根据用户问题，一次性判断所有意图信息。
 
-## 意图判断 (intent)
+## 服务范围 (is_in_scope)
 
-返回 "analyze" 的情况：
-- 用户要求分析股票或数据（如"分析一下茅台"、"预测下个季度"、"看看比亚迪走势"）
-- 用户要求更换模型重新分析（如"换个XGBoost模型"、"用随机森林预测"）
-- 用户要求改变预测参数（如"预测未来60天"）
-- 用户明确要求执行分析、预测等操作
+判断问题是否在服务范围内（金融、股票、投资、经济相关）：
+- in_scope=true:
+  - 股票分析/预测（如"分析茅台走势"、"预测比亚迪"）
+  - 金融新闻查询（如"最近有什么股市新闻"）
+  - 研报查询（如"茅台的研报观点"）
+  - 宏观经济问题（如"经济形势怎么样"）
+  - 投资相关问题（如"该买什么股票"）
+  - 金融闲聊（如"你好"、"谢谢" - 金融助手礼貌性回复）
 
-返回 "answer" 的情况：
-- 用户只是提问（如"这个预测的置信度是多少"、"刚才的结果什么意思"）
-- 用户询问已有结果的含义、解释、建议
-- 闲聊或与分析无关的问题
+- in_scope=false:
+  - 完全无关的问题（如"今天天气怎么样"、"北京有什么好吃的"、"帮我写代码"）
+  - 此时必须设置 out_of_scope_reply 友好拒绝
 
-## 功能判断 (tools)
+## 预测判断 (is_forecast)
 
-- forecast: 是否需要序列预测（用户提到预测、分析走势、趋势等）
-- report_rag: 是否需要研报检索（用户提到研报、券商报告、评级、行业分析、能源报告、研究报告等）
-- news_rag: 是否需要新闻搜索
-  - 返回 true: 用户明确要搜索新闻、查询资讯、了解消息
-    - 例如: "茅台最近有什么新闻"、"搜索比亚迪的资讯"、"查一下宁德时代的报道"、"最近有什么关于新能源的消息"
-  - 返回 false: 用户只是分析/预测（forecast 流程内部会自动获取新闻做情绪分析）
-    - 例如: "分析茅台"、"预测走势"
+判断是否需要执行股票预测分析：
+- is_forecast=true:
+  - 明确要求分析/预测股票走势（"分析茅台"、"预测未来走势"）
+  - 要求改变模型重新分析（"换XGBoost模型"）
+  - 要求改变时间参数（"预测未来60天"）
 
-## 模型选择 (model)
+- is_forecast=false:
+  - 只是查询新闻/研报（"茅台最近有什么新闻"、"茅台研报观点"）
+  - 闲聊或追问（"刚才的结果什么意思"）
+  - 无需预测的问题
 
-根据用户描述选择最合适的预测模型：
-- "prophet": 默认模型，适合长期预测、季节性数据
-- "xgboost": 用户提到 XGBoost、XGB、梯度提升、非线性
-- "randomforest": 用户提到随机森林、RF、集成学习
-- "dlinear": 用户提到 DLinear、线性模型、轻量
+## 工具开关
 
-如果用户没有指定模型，默认使用 "prophet"。
+判断需要启用哪些工具（可同时开启多个）：
 
-## 时间窗口参数 (params)
+- enable_rag: 研报知识库检索
+  - true: 用户提到研报、研究报告、券商观点、评级、行业分析
+  - 示例: "茅台的研报观点"、"分析师怎么看比亚迪"
 
-根据用户描述识别时间窗口：
+- enable_search: 网络搜索
+  - true: 用户明确要搜索新闻/资讯，或需要最新信息
+  - 示例: "搜索茅台新闻"、"帮我查一下新能源政策"
 
-history_days (历史数据天数):
-- 用户提到"过去一年"、"近一年" → 365
-- 用户提到"过去半年"、"近半年" → 180
-- 用户提到"过去三个月"、"近三个月" → 90
-- 用户提到"过去一个月"、"近一个月" → 30
-- 默认值: 365
+- enable_domain_info: 领域信息获取
+  - true: 需要获取股票相关的领域信息（实时新闻、行情等）
+  - 在预测流程中通常自动开启
+  - 示例: "今天股市有什么新闻"
 
-forecast_horizon (预测天数):
-- 用户提到"预测一年"、"未来一年" → 365
-- 用户提到"下个季度"、"未来三个月" → 90
-- 用户提到"下个月"、"未来一个月" → 30
-- 用户提到"未来两周"、"下两周" → 14
-- 用户提到"未来一周" → 7
-- 用户提到"未来N天" → N
-- 默认值: 30
+注意：
+- 预测流程 (is_forecast=true) 通常自动开启 enable_search 和 enable_domain_info
+- 非预测的新闻查询，如果用户只是随便问问，开启 enable_domain_info
+- 非预测的明确搜索，开启 enable_search
 
-只返回 JSON 格式：
+## 股票提取 (stock_mention)
+
+从用户问题中提取提到的股票名称/代码：
+- 单股票: "茅台"、"600519"、"比亚迪"
+- 多股票: "茅台,五粮液" (逗号分隔)
+- 无股票: 留空
+
+## 关键词提取 (raw_*_keywords)
+
+提取初步搜索关键词（后续会根据股票匹配结果优化）：
+- raw_search_keywords: 网络搜索关键词
+- raw_rag_keywords: 研报检索关键词
+- raw_domain_keywords: 领域信息关键词
+
+示例：
+- "分析茅台走势" → raw_search_keywords=["茅台走势", "茅台分析"]
+- "搜索新能源政策" → raw_search_keywords=["新能源政策", "新能源补贴"]
+
+## 预测参数
+
+仅 is_forecast=true 时需要设置：
+- forecast_model: prophet(默认)/xgboost/randomforest/dlinear
+- history_days: 历史数据天数 (默认365)
+- forecast_horizon: 预测天数 (默认30)
+
+根据用户描述调整：
+- "用XGBoost" → model="xgboost"
+- "预测三个月" → forecast_horizon=90
+- "看半年数据" → history_days=180
+
+返回 JSON 格式:
 {
-    "intent": "analyze" 或 "answer",
+    "is_in_scope": true/false,
+    "is_forecast": true/false,
+    "enable_rag": true/false,
+    "enable_search": true/false,
+    "enable_domain_info": true/false,
+    "stock_mention": "股票名称或空字符串",
+    "raw_search_keywords": ["关键词1", "关键词2"],
+    "raw_rag_keywords": ["关键词1"],
+    "raw_domain_keywords": ["关键词1"],
+    "forecast_model": "prophet",
+    "history_days": 365,
+    "forecast_horizon": 30,
     "reason": "判断理由",
-    "tools": {
-        "forecast": true/false,
-        "report_rag": true/false,
-        "news_rag": true/false
-    },
-    "model": "prophet" 或 "xgboost" 或 "randomforest" 或 "dlinear",
-    "params": {
-        "history_days": 365,
-        "forecast_horizon": 30
-    }
+    "out_of_scope_reply": "若超出范围的友好回复，否则为null"
 }"""
-        
+
         messages = [{"role": "system", "content": system_prompt}]
-        
+
         # 添加对话历史
         if conversation_history:
             recent_history = conversation_history[-6:] if len(conversation_history) > 6 else conversation_history
@@ -121,167 +161,163 @@ forecast_horizon (预测天数):
                     "role": msg["role"],
                     "content": msg["content"]
                 })
-        
+
         # 添加当前问题
         messages.append({
-            "role": "user", 
-            "content": f"用户问题: {user_query}\n\n请判断用户意图。"
+            "role": "user",
+            "content": f"用户问题: {user_query}\n\n请进行意图识别。"
         })
-        
+
         response = self.client.chat.completions.create(
             model="deepseek-chat",
             messages=messages,
             temperature=0.1,
             response_format={"type": "json_object"}
         )
-        
-        import json
+
         result = json.loads(response.choices[0].message.content)
-        return result
-    
-    def answer_question(
+
+        # 转换为 UnifiedIntent
+        return UnifiedIntent(
+            is_in_scope=result.get("is_in_scope", True),
+            is_forecast=result.get("is_forecast", False),
+            enable_rag=result.get("enable_rag", False),
+            enable_search=result.get("enable_search", False),
+            enable_domain_info=result.get("enable_domain_info", False),
+            stock_mention=result.get("stock_mention") or None,
+            raw_search_keywords=result.get("raw_search_keywords", []),
+            raw_rag_keywords=result.get("raw_rag_keywords", []),
+            raw_domain_keywords=result.get("raw_domain_keywords", []),
+            forecast_model=result.get("forecast_model", "prophet"),
+            history_days=result.get("history_days", 365),
+            forecast_horizon=result.get("forecast_horizon", 30),
+            reason=result.get("reason", ""),
+            out_of_scope_reply=result.get("out_of_scope_reply")
+        )
+
+    def resolve_keywords(
         self,
-        user_query: str,
-        conversation_history: Optional[List[Dict[str, str]]] = None
-    ) -> str:
+        intent: UnifiedIntent,
+        stock_name: Optional[str] = None,
+        stock_code: Optional[str] = None
+    ) -> ResolvedKeywords:
         """
-        基于对话历史回答问题（不执行新分析）
-        
+        根据股票匹配结果解析最终关键词
+
+        将 raw_*_keywords 中的股票简称替换为全称/代码
+
         Args:
-            user_query: 用户问题
-            conversation_history: 对话历史
-            
+            intent: 意图识别结果
+            stock_name: 匹配到的股票名称 (如 "贵州茅台")
+            stock_code: 匹配到的股票代码 (如 "600519")
+
         Returns:
-            回答文本
+            ResolvedKeywords
         """
-        system_prompt = """你是专业的金融分析助手。根据对话历史中的分析结果，回答用户的问题。
+        # 如果没有股票匹配结果，直接返回原始关键词
+        if not stock_name and not stock_code:
+            return ResolvedKeywords(
+                search_keywords=intent.raw_search_keywords,
+                rag_keywords=intent.raw_rag_keywords,
+                domain_keywords=intent.raw_domain_keywords
+            )
 
-如果对话历史中有之前的分析结果，请基于这些结果回答问题。
-如果问题涉及预测结果、模型性能、数据特征等，请从对话历史中提取相关信息。
-如果无法从历史中找到相关信息，请礼貌地说明需要先进行分析。"""
-        
-        messages = [{"role": "system", "content": system_prompt}]
-        
-        # 添加对话历史
-        if conversation_history:
-            recent_history = conversation_history[-10:] if len(conversation_history) > 10 else conversation_history
-            for msg in recent_history:
-                messages.append({
-                    "role": msg["role"],
-                    "content": msg["content"]
-                })
-        
-        # 添加当前问题
-        messages.append({
-            "role": "user",
-            "content": user_query
-        })
-        
-        response = self.client.chat.completions.create(
-            model="deepseek-chat",
-            messages=messages,
-            temperature=0.3,
-            max_tokens=500,
+        # 有股票匹配结果，增强关键词
+        search_keywords = list(intent.raw_search_keywords)
+        rag_keywords = list(intent.raw_rag_keywords)
+        domain_keywords = list(intent.raw_domain_keywords)
+
+        # 添加股票名称和代码
+        if stock_name:
+            if stock_name not in search_keywords:
+                search_keywords.insert(0, stock_name)
+            if stock_name not in rag_keywords:
+                rag_keywords.insert(0, stock_name)
+            if stock_name not in domain_keywords:
+                domain_keywords.insert(0, stock_name)
+
+        if stock_code:
+            if stock_code not in search_keywords:
+                search_keywords.append(stock_code)
+            if stock_code not in domain_keywords:
+                domain_keywords.append(stock_code)
+
+        # 替换简称 (如果 stock_mention 存在且与 stock_name 不同)
+        if intent.stock_mention and stock_name and intent.stock_mention != stock_name:
+            for i, kw in enumerate(search_keywords):
+                if intent.stock_mention in kw:
+                    search_keywords[i] = kw.replace(intent.stock_mention, stock_name)
+            for i, kw in enumerate(rag_keywords):
+                if intent.stock_mention in kw:
+                    rag_keywords[i] = kw.replace(intent.stock_mention, stock_name)
+            for i, kw in enumerate(domain_keywords):
+                if intent.stock_mention in kw:
+                    domain_keywords[i] = kw.replace(intent.stock_mention, stock_name)
+
+        return ResolvedKeywords(
+            search_keywords=search_keywords,
+            rag_keywords=rag_keywords,
+            domain_keywords=domain_keywords
         )
 
-        return response.choices[0].message.content
-
-    def answer_question_stream(
+    def generate_chat_response(
         self,
         user_query: str,
-        conversation_history: Optional[List[Dict[str, str]]] = None
-    ) -> Generator[str, None, None]:
+        conversation_history: Optional[List[Dict[str, str]]] = None,
+        context: Optional[str] = None,
+        stream: bool = False
+    ):
         """
-        基于对话历史流式回答问题（不执行新分析）
+        生成聊天回复 (非预测流程)
 
         Args:
             user_query: 用户问题
             conversation_history: 对话历史
+            context: 额外上下文 (如检索到的内容)
+            stream: 是否流式输出
 
-        Yields:
-            文本片段
+        Returns:
+            回复文本或生成器
         """
-        system_prompt = """你是专业的金融分析助手。根据对话历史中的分析结果，回答用户的问题。
-
-如果对话历史中有之前的分析结果，请基于这些结果回答问题。
-如果问题涉及预测结果、模型性能、数据特征等，请从对话历史中提取相关信息。
-如果无法从历史中找到相关信息，请礼貌地说明需要先进行分析。"""
-
-        messages = [{"role": "system", "content": system_prompt}]
-
-        # 添加对话历史
-        if conversation_history:
-            recent_history = conversation_history[-10:] if len(conversation_history) > 10 else conversation_history
-            for msg in recent_history:
-                messages.append({
-                    "role": msg["role"],
-                    "content": msg["content"]
-                })
-
-        # 添加当前问题
-        messages.append({
-            "role": "user",
-            "content": user_query
-        })
-
-        # 使用流式响应
-        response = self.client.chat.completions.create(
-            model="deepseek-chat",
-            messages=messages,
-            temperature=0.3,
-            max_tokens=500,
-            stream=True
-        )
-
-        for chunk in response:
-            if chunk.choices and chunk.choices[0].delta.content:
-                yield chunk.choices[0].delta.content
-
-    def summarize_news_stream(
-        self,
-        user_query: str,
-        news_context: str,
-        conversation_history: Optional[List[Dict[str, str]]] = None
-    ) -> Generator[str, None, None]:
-        """
-        流式总结新闻内容
-
-        Args:
-            user_query: 用户问题
-            news_context: 新闻搜索结果（格式化后的文本）
-            conversation_history: 对话历史
-
-        Yields:
-            文本片段
-        """
-        system_prompt = """你是专业的财经新闻分析师。根据搜索到的新闻内容，为用户提供简洁的总结。
+        system_prompt = """你是专业的金融分析助手。根据上下文和对话历史回答用户问题。
 
 要求：
-1. 提取最重要的 3-5 条新闻要点
-2. 分析新闻对市场/股票的潜在影响
-3. 语言简洁，重点突出
-4. 如果新闻数量较少或质量不高，如实说明
-5. **重要**：在提到具体新闻时，必须使用 markdown 链接格式 [新闻标题](url) 嵌入原文链接
-
-示例输出格式：
-根据搜索到的新闻，贵州茅台近期主要有以下动态：
-
-1. **业绩表现**：[贵州茅台发布年报，营收突破1500亿](https://finance.sina.com.cn/xxx)，显示公司业绩稳健增长。
-
-2. **市场动态**：[茅台酒批价春节前稳中有升](https://eastmoney.com/xxx)，市场需求持续旺盛。"""
+1. 回答简洁专业
+2. 如果引用了来源，使用 markdown 链接格式 [标题](url)
+3. 如果引用了研报，使用格式 [研报名称](rag://文件名.pdf#page=页码)
+4. 如果无法从上下文找到相关信息，如实说明"""
 
         messages = [{"role": "system", "content": system_prompt}]
 
+        # 添加对话历史
         if conversation_history:
-            recent_history = conversation_history[-4:] if len(conversation_history) > 4 else conversation_history
+            recent_history = conversation_history[-10:] if len(conversation_history) > 10 else conversation_history
             for msg in recent_history:
-                messages.append({"role": msg["role"], "content": msg["content"]})
+                messages.append({
+                    "role": msg["role"],
+                    "content": msg["content"]
+                })
 
-        messages.append({
-            "role": "user",
-            "content": f"用户问题: {user_query}\n\n搜索到的新闻:\n{news_context}\n\n请总结这些新闻。"
-        })
+        # 构建用户消息
+        user_content = user_query
+        if context:
+            user_content = f"参考信息:\n{context}\n\n用户问题: {user_query}"
 
+        messages.append({"role": "user", "content": user_content})
+
+        if stream:
+            return self._stream_response(messages)
+        else:
+            response = self.client.chat.completions.create(
+                model="deepseek-chat",
+                messages=messages,
+                temperature=0.3,
+                max_tokens=800
+            )
+            return response.choices[0].message.content
+
+    def _stream_response(self, messages: List[Dict]) -> Generator[str, None, None]:
+        """流式响应"""
         response = self.client.chat.completions.create(
             model="deepseek-chat",
             messages=messages,
@@ -294,62 +330,157 @@ forecast_horizon (预测天数):
             if chunk.choices and chunk.choices[0].delta.content:
                 yield chunk.choices[0].delta.content
 
-    def extract_search_keywords(self, user_query: str) -> Dict[str, Any]:
+    def generate_conclusion(
+        self,
+        user_query: str,
+        historical_analysis: str,
+        news_summary: str,
+        report_summary: str,
+        emotion_result: Dict,
+        prediction_result: Dict,
+        stock_info: Dict,
+    ) -> str:
         """
-        从用户查询中提取搜索关键词，判断是否股票相关
+        生成预测流程的综合结论
 
         Args:
-            user_query: 用户原始问题，如 "找茅台最近的新闻"
+            user_query: 用户问题
+            historical_analysis: 历史数据分析结果
+            news_summary: 新闻总结
+            report_summary: 研报观点总结
+            emotion_result: 情感分析结果
+            prediction_result: 预测结果
+            stock_info: 股票信息
 
         Returns:
-            {
-                "keywords": str,      # 提取的关键词
-                "is_stock": bool,     # 是否是股票相关
-                "stock_name": str,    # 股票名称（如有）
-                "stock_code": str,    # 股票代码（如有）
-            }
+            综合分析报告
         """
-        system_prompt = """从用户问题中提取搜索关键词，判断是否股票相关。
+        system_prompt = """你是专业的金融分析师。根据提供的分析结果，生成综合分析报告。
 
-分析用户想搜索什么，提取核心关键词，判断是否涉及具体股票/公司。
+报告要求：
+1. 结构清晰，分点论述
+2. 综合考虑历史走势、新闻情绪、研报观点、模型预测
+3. 给出合理的投资建议（需声明仅供参考）
+4. 语言专业简洁
+5. 如果某项数据缺失，不要提及
 
-示例：
-- "找茅台最近的新闻" → keywords="贵州茅台", is_stock=true, stock_name="贵州茅台", stock_code="600519"
-- "搜索比亚迪的资讯" → keywords="比亚迪", is_stock=true, stock_name="比亚迪", stock_code="002594"
-- "查一下新能源行业动态" → keywords="新能源行业", is_stock=false, stock_name="", stock_code=""
-- "最近有什么关于人工智能的消息" → keywords="人工智能", is_stock=false, stock_name="", stock_code=""
-- "宁德时代最新动态" → keywords="宁德时代", is_stock=true, stock_name="宁德时代", stock_code="300750"
-- "中石油有什么新闻" → keywords="中国石油", is_stock=true, stock_name="中国石油", stock_code="601857"
+报告结构建议：
+1. 近期走势回顾
+2. 市场情绪分析
+3. 研报观点总结（如有）
+4. 模型预测结果
+5. 综合观点与建议"""
 
-返回 JSON 格式:
-{
-    "keywords": "提取的搜索关键词",
-    "is_stock": true/false,
-    "stock_name": "股票名称或空字符串",
-    "stock_code": "股票代码或空字符串"
-}"""
+        context = f"""股票: {stock_info.get('stock_name', '')} ({stock_info.get('stock_code', '')})
 
-        try:
-            response = self.client.chat.completions.create(
-                model="deepseek-chat",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": f"用户问题: {user_query}"}
-                ],
-                temperature=0.1,
-                response_format={"type": "json_object"}
-            )
+历史数据分析:
+{historical_analysis}
 
-            import json
-            result = json.loads(response.choices[0].message.content)
-            return result
+新闻情绪:
+{news_summary}
+情绪分数: {emotion_result.get('score', 'N/A')} (范围 -1 到 1)
+情绪描述: {emotion_result.get('summary', 'N/A')}
 
-        except Exception as e:
-            print(f"[IntentAgent] 关键词提取失败: {e}")
-            return {
-                "keywords": user_query,
-                "is_stock": False,
-                "stock_name": "",
-                "stock_code": ""
-            }
+研报观点:
+{report_summary if report_summary else '暂无研报数据'}
 
+模型预测:
+预测模型: {prediction_result.get('model', 'N/A')}
+预测趋势: {prediction_result.get('trend', 'N/A')}
+预测区间: {prediction_result.get('range', 'N/A')}"""
+
+        response = self.client.chat.completions.create(
+            model="deepseek-chat",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"用户问题: {user_query}\n\n分析数据:\n{context}\n\n请生成综合分析报告。"}
+            ],
+            temperature=0.3,
+            max_tokens=1500
+        )
+
+        return response.choices[0].message.content
+
+    # ========== 兼容旧版方法 ==========
+
+    def judge_intent(
+        self,
+        user_query: str,
+        conversation_history: Optional[List[Dict[str, str]]] = None
+    ) -> Dict[str, Any]:
+        """
+        判断用户意图 (兼容旧版 API)
+
+        Returns:
+            包含 intent, reason, tools, model, params 的字典
+        """
+        unified = self.recognize_intent(user_query, conversation_history)
+
+        # 转换为旧版格式
+        if not unified.is_in_scope:
+            intent = "out_of_scope"
+        elif unified.is_forecast:
+            intent = "analyze"
+        else:
+            intent = "answer"
+
+        return {
+            "intent": intent,
+            "reason": unified.reason,
+            "tools": {
+                "forecast": unified.is_forecast,
+                "report_rag": unified.enable_rag,
+                "news_rag": unified.enable_search or unified.enable_domain_info
+            },
+            "model": unified.forecast_model,
+            "params": {
+                "history_days": unified.history_days,
+                "forecast_horizon": unified.forecast_horizon
+            },
+            # 新增字段
+            "unified_intent": unified.model_dump()
+        }
+
+    def answer_question(
+        self,
+        user_query: str,
+        conversation_history: Optional[List[Dict[str, str]]] = None
+    ) -> str:
+        """基于对话历史回答问题 (兼容旧版)"""
+        return self.generate_chat_response(user_query, conversation_history)
+
+    def answer_question_stream(
+        self,
+        user_query: str,
+        conversation_history: Optional[List[Dict[str, str]]] = None
+    ) -> Generator[str, None, None]:
+        """流式回答问题 (兼容旧版)"""
+        return self.generate_chat_response(user_query, conversation_history, stream=True)
+
+    def summarize_news_stream(
+        self,
+        user_query: str,
+        news_context: str,
+        conversation_history: Optional[List[Dict[str, str]]] = None
+    ) -> Generator[str, None, None]:
+        """流式总结新闻 (兼容旧版)"""
+        return self.generate_chat_response(
+            user_query,
+            conversation_history,
+            context=f"搜索到的新闻:\n{news_context}",
+            stream=True
+        )
+
+    def extract_search_keywords(self, user_query: str) -> Dict[str, Any]:
+        """
+        提取搜索关键词 (兼容旧版)
+        """
+        # 使用统一意图识别
+        intent = self.recognize_intent(user_query)
+
+        return {
+            "keywords": " ".join(intent.raw_search_keywords) if intent.raw_search_keywords else user_query,
+            "is_stock": bool(intent.stock_mention),
+            "stock_name": intent.stock_mention or "",
+            "stock_code": ""  # 代码需要通过股票匹配服务获取
+        }

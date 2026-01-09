@@ -3,9 +3,15 @@
 ======================
 
 提供统一的异步分析接口，支持 forecast/rag/news/chat 四种意图
+
+轮询间隔建议: 0.5s (500ms)
 """
 
+import asyncio
+from typing import Optional
+
 from fastapi import APIRouter, BackgroundTasks, HTTPException
+from pydantic import BaseModel
 
 from app.core.config import settings
 from app.core.session import Session
@@ -15,6 +21,16 @@ from app.schemas.session_schema import (
     AnalysisStatusResponse,
     SessionStatus
 )
+from app.agents import SuggestionAgent
+
+
+class SuggestionsRequest(BaseModel):
+    """快速追问建议请求模型"""
+    session_id: Optional[str] = None
+
+
+# 轮询间隔常量 (供前端参考)
+RECOMMENDED_POLL_INTERVAL_MS = 500
 
 router = APIRouter()
 
@@ -87,11 +103,18 @@ async def get_analysis_status(session_id: str):
     """
     查询分析任务状态
 
+    前端轮询间隔建议: 500ms (0.5s)
+
     Args:
         session_id: 会话 ID
 
     Returns:
         AnalysisStatusResponse: 包含完整会话数据
+            - session_id: 会话 ID
+            - status: 状态 (pending/processing/completed/error)
+            - steps: 当前步骤
+            - total_steps: 总步骤数
+            - data: 完整会话数据
     """
     session = Session(session_id)
     data = session.get()
@@ -103,6 +126,7 @@ async def get_analysis_status(session_id: str):
         session_id=data.session_id,
         status=data.status,
         steps=data.steps,
+        total_steps=data.total_steps,
         data=data
     )
 
@@ -125,3 +149,46 @@ async def delete_analysis_session(session_id: str):
     session.delete()
 
     return {"message": "会话已删除"}
+
+
+@router.post("/suggestions")
+async def get_suggestions(request: SuggestionsRequest):
+    """
+    获取快速追问建议
+
+    Args:
+        request: 请求体
+            - session_id: 会话ID（可选）
+
+    Returns:
+        {"suggestions": ["建议1", "建议2", ...]}
+    """
+    try:
+        api_key = settings.api_key
+    except ValueError as e:
+        return {"error": str(e), "suggestions": []}
+
+    session_id = request.session_id
+
+    # 如果没有提供 session_id，返回默认建议
+    if not session_id or not Session.exists(session_id):
+        default_suggestions = [
+            "帮我分析一下茅台，预测下个季度走势",
+            "查看最近的市场趋势",
+            "对比几只白酒股的表现",
+            "生成一份投资分析报告"
+        ]
+        return {"suggestions": default_suggestions}
+
+    # 获取对话历史
+    session = Session(session_id)
+    conversation_history = session.get_conversation_history()
+
+    # 生成建议
+    suggestion_agent = SuggestionAgent(api_key)
+    suggestions = await asyncio.to_thread(
+        suggestion_agent.generate_suggestions,
+        conversation_history
+    )
+
+    return {"suggestions": suggestions}

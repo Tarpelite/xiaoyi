@@ -1,24 +1,38 @@
 """
-统一任务处理器
-===============
+统一任务处理器 V3
+==================
 
-复刻 chat.py 的逻辑到异步模式
-支持 forecast/rag/news/chat 四种意图
+基于新的统一架构:
+1. 统一意图识别 (UnifiedIntent)
+2. 股票 RAG 匹配 (当 stock_mention 非空时)
+3. 并行数据获取
+4. 新闻 RAG 服务 (语义去重)
+5. 新版 Session 管理
 """
 
 import asyncio
 from datetime import datetime, timedelta
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Any
 
-from app.core.session import Session
+from app.core.session import Session, SessionManager
 from app.core.config import settings
 from app.schemas.session_schema import (
     SessionStatus,
+    StepStatus,
     TimeSeriesPoint,
-    NewsItem,
+    UnifiedIntent,
+    ResolvedKeywords,
+    StockMatchResult,
+    StockInfo,
+    SummarizedNewsItem,
+    ReportItem,
     RAGSource,
-    EmotionAnalysis
+    NewsItem,
 )
+
+# Services
+from app.services.stock_matcher import get_stock_matcher
+from app.services.news_rag_service import create_news_rag_service
 
 # Agents
 from app.agents import IntentAgent, RAGAgent, FinanceChatAgent
@@ -37,8 +51,17 @@ from app.models import (
 from app.sentiment import SentimentAnalyzer
 
 
-class UnifiedTaskProcessor:
-    """统一任务处理器"""
+class UnifiedTaskProcessorV3:
+    """
+    统一任务处理器 V3
+
+    核心流程:
+    1. 意图识别 (一次 LLM 调用返回所有信息)
+    2. 股票验证 (当 stock_mention 非空时)
+    3. 并行数据获取 (RAG, Search, Domain Info)
+    4. 预测流程或对话流程
+    5. 结果生成
+    """
 
     def __init__(self, api_key: str):
         self.api_key = api_key
@@ -46,6 +69,7 @@ class UnifiedTaskProcessor:
         self.rag_agent = RAGAgent(api_key)
         self.finance_agent = FinanceChatAgent(api_key)
         self.sentiment_analyzer = SentimentAnalyzer(api_key)
+        self.stock_matcher = get_stock_matcher()
 
     async def execute(
         self,
@@ -61,42 +85,93 @@ class UnifiedTaskProcessor:
             session_id: 会话 ID
             user_input: 用户输入
             model_name: 预测模型名称
-            force_intent: 强制指定意图
+            force_intent: 强制指定意图类型
         """
+        # 使用兼容模式 (旧版 Session)
         session = Session(session_id)
 
         try:
             # 获取对话历史
             conversation_history = session.get_conversation_history()
 
-            # Step 0: 意图识别
+            # === 阶段 1: 意图识别 ===
+            session.update_step_detail(1, "running", "分析用户意图...")
+
             if force_intent:
-                intent = force_intent
-                intent_result = {
-                    "intent": force_intent,
-                    "reason": "用户强制指定",
-                    "tools": self._get_tools_for_intent(force_intent),
-                    "model": model_name,
-                    "params": {"history_days": 365, "forecast_horizon": 30}
-                }
+                intent = self._create_forced_intent(force_intent, model_name)
             else:
-                intent_result = await asyncio.to_thread(
-                    self.intent_agent.judge_intent, user_input, conversation_history
+                intent = await asyncio.to_thread(
+                    self.intent_agent.recognize_intent,
+                    user_input,
+                    conversation_history
                 )
-                intent = self._determine_intent(intent_result)
 
-            # 保存意图结果（会自动初始化步骤）
-            session.save_intent_result(intent, intent_result)
+            # 保存意图
+            session.save_unified_intent(intent)
 
-            # 路由到对应处理器
-            if intent == "forecast":
-                await self._execute_forecast(session, user_input, intent_result, conversation_history)
-            elif intent == "rag":
-                await self._execute_rag(session, user_input, conversation_history)
-            elif intent == "news":
-                await self._execute_news(session, user_input, conversation_history)
-            else:  # chat
-                await self._execute_chat(session, user_input, conversation_history)
+            # 检查是否超出范围
+            if not intent.is_in_scope:
+                session.save_conclusion(intent.out_of_scope_reply or "抱歉，我是金融时序分析助手，暂不支持此类问题。")
+                session.update_step_detail(1, "completed", "超出服务范围")
+                session.mark_completed_v2()
+                return
+
+            session.update_step_detail(1, "completed", f"意图: {'预测' if intent.is_forecast else '对话'}")
+
+            # === 阶段 2: 股票验证 (当 stock_mention 非空时) ===
+            stock_match_result = None
+            resolved_keywords = None
+
+            if intent.stock_mention:
+                session.update_step_detail(2, "running", f"验证股票: {intent.stock_mention}")
+
+                stock_match_result = await asyncio.to_thread(
+                    self.stock_matcher.match,
+                    intent.stock_mention
+                )
+
+                session.save_stock_match(stock_match_result)
+
+                if not stock_match_result.success:
+                    # 股票验证失败，终止流程
+                    error_msg = stock_match_result.error_message or "股票验证失败"
+                    session.save_conclusion(error_msg)
+                    session.update_step_detail(2, "error", error_msg)
+                    session.mark_completed_v2()
+                    return
+
+                # 解析最终关键词
+                stock_info = stock_match_result.stock_info
+                resolved_keywords = self.intent_agent.resolve_keywords(
+                    intent,
+                    stock_name=stock_info.stock_name if stock_info else None,
+                    stock_code=stock_info.stock_code if stock_info else None
+                )
+                session.save_resolved_keywords(resolved_keywords)
+
+                session.update_step_detail(
+                    2, "completed",
+                    f"匹配: {stock_info.stock_name}({stock_info.stock_code})" if stock_info else "无匹配"
+                )
+            else:
+                # 无股票提及，直接使用原始关键词
+                resolved_keywords = ResolvedKeywords(
+                    search_keywords=intent.raw_search_keywords,
+                    rag_keywords=intent.raw_rag_keywords,
+                    domain_keywords=intent.raw_domain_keywords
+                )
+
+            # === 阶段 3+: 根据意图执行 ===
+            if intent.is_forecast:
+                await self._execute_forecast_v3(
+                    session, user_input, intent, stock_match_result,
+                    resolved_keywords, conversation_history
+                )
+            else:
+                await self._execute_chat_v3(
+                    session, user_input, intent, stock_match_result,
+                    resolved_keywords, conversation_history
+                )
 
             # 标记完成
             session.mark_completed_v2()
@@ -104,6 +179,7 @@ class UnifiedTaskProcessor:
             # 添加助手回复到对话历史
             data = session.get()
             if data and data.conclusion:
+                session.add_conversation_message("user", user_input)
                 session.add_conversation_message("assistant", data.conclusion)
 
         except Exception as e:
@@ -112,222 +188,295 @@ class UnifiedTaskProcessor:
             session.mark_error(str(e))
             raise
 
-    def _determine_intent(self, intent_result: dict) -> str:
-        """从意图识别结果确定执行意图"""
-        tools = intent_result.get("tools", {})
-        intent = intent_result.get("intent", "analyze")
+    def _create_forced_intent(self, force_type: str, model_name: str) -> UnifiedIntent:
+        """创建强制指定的意图"""
+        return UnifiedIntent(
+            is_in_scope=True,
+            is_forecast=(force_type == "forecast"),
+            enable_rag=(force_type == "rag"),
+            enable_search=(force_type in ["news", "forecast"]),
+            enable_domain_info=(force_type in ["news", "forecast"]),
+            forecast_model=model_name,
+            reason="用户强制指定"
+        )
 
-        if tools.get("report_rag"):
-            return "rag"
-        if tools.get("news_rag") and not tools.get("forecast"):
-            return "news"
-        if tools.get("forecast") or intent == "analyze":
-            return "forecast"
-        return "chat"
+    # ========== 预测流程 ==========
 
-    def _get_tools_for_intent(self, intent: str) -> dict:
-        """根据意图获取 tools 配置"""
-        mapping = {
-            "forecast": {"forecast": True, "report_rag": False, "news_rag": False},
-            "rag": {"forecast": False, "report_rag": True, "news_rag": False},
-            "news": {"forecast": False, "report_rag": False, "news_rag": True},
-            "chat": {"forecast": False, "report_rag": False, "news_rag": False},
-        }
-        return mapping.get(intent, {"forecast": False, "report_rag": False, "news_rag": False})
-
-    # ========== 预测流程（7步） ==========
-
-    async def _execute_forecast(
+    async def _execute_forecast_v3(
         self,
         session: Session,
         user_input: str,
-        intent_result: dict,
+        intent: UnifiedIntent,
+        stock_match: Optional[StockMatchResult],
+        keywords: ResolvedKeywords,
         conversation_history: List[dict]
     ):
-        """执行预测分析流程"""
-        params = intent_result.get("params", {})
-        model = intent_result.get("model", "prophet")
-        history_days = params.get("history_days", 365)
-        forecast_horizon = params.get("forecast_horizon", 30)
+        """
+        执行预测流程 (V3)
 
-        # Step 1: 数据获取与预处理
-        session.update_step_detail(1, "running", "解析用户需求...")
+        阶段:
+        1. 准备阶段 (意图+股票验证) - 已完成
+        2. 数据获取 (并行)
+        3. 分析处理 (并行)
+        4. 模型预测
+        5. 报告生成
+        """
+        stock_info = stock_match.stock_info if stock_match else None
+        stock_code = stock_info.stock_code if stock_info else ""
+        stock_name = stock_info.stock_name if stock_info else user_input
 
-        # NLP 解析
-        parsed = await asyncio.to_thread(
-            self.finance_agent.nlp.parse, user_input, conversation_history
-        )
-        data_config = parsed["data_config"]
-        analysis_config = parsed["analysis_config"]
+        # === 阶段 2: 数据获取 (并行) ===
+        session.update_step_detail(3, "running", "获取历史数据和新闻...")
 
         # 设置日期范围
         end_date = datetime.now().strftime("%Y%m%d")
-        start_date = (datetime.now() - timedelta(days=history_days)).strftime("%Y%m%d")
-        if "params" not in data_config:
-            data_config["params"] = {}
-        data_config["params"]["start_date"] = start_date
-        data_config["params"]["end_date"] = end_date
+        start_date = (datetime.now() - timedelta(days=intent.history_days)).strftime("%Y%m%d")
 
-        session.update_step_detail(1, "running", f"获取 {history_days} 天历史数据...")
+        # 并行获取数据
+        stock_data_task = self._fetch_stock_data(stock_code, start_date, end_date)
+        news_task = self._fetch_news_combined(stock_code, stock_name, keywords)
+        rag_task = self._fetch_rag_reports(keywords.rag_keywords) if intent.enable_rag else asyncio.sleep(0)
 
-        # 获取数据
-        raw_df = await asyncio.to_thread(DataFetcher.fetch, data_config)
-        df = await asyncio.to_thread(DataFetcher.prepare, raw_df, data_config)
+        results = await asyncio.gather(
+            stock_data_task,
+            news_task,
+            rag_task,
+            return_exceptions=True
+        )
 
-        # 保存原始时序数据
+        df = results[0] if not isinstance(results[0], Exception) else None
+        news_result = results[1] if not isinstance(results[1], Exception) else ([], {})
+        rag_sources = results[2] if not isinstance(results[2], Exception) and intent.enable_rag else []
+
+        if df is None or df.empty:
+            session.save_conclusion(f"无法获取 {stock_name} 的历史数据，请检查股票代码是否正确。")
+            session.update_step_detail(3, "error", "数据获取失败")
+            return
+
+        # 保存数据
         original_points = self._df_to_points(df, is_prediction=False)
         session.save_time_series_original(original_points)
 
-        # 保存股票代码
-        stock_symbol = data_config.get("params", {}).get("symbol", "")
-        stock_name = analysis_config.get("stock_name", user_input)
-        data = session.get()
-        if data:
-            data.stock_code = stock_symbol
-            session._save(data)
+        news_items, sentiment_result = news_result
+        session.save_news([n.model_dump() for n in news_items] if news_items else [])
 
-        session.update_step_detail(1, "completed", f"已获取历史数据 {len(df)} 天")
+        if rag_sources:
+            session.save_rag_sources(rag_sources)
 
-        # Step 2: 新闻获取与情绪分析（始终使用 AkShare + Tavily）
-        session.update_step_detail(2, "running", "获取相关新闻...")
+        session.update_step_detail(3, "completed", f"历史数据 {len(df)} 天, 新闻 {len(news_items)} 条")
 
-        news_list, sentiment_result = await self._fetch_news_and_sentiment(
-            stock_symbol, stock_name
+        # === 阶段 3: 分析处理 (并行) ===
+        session.update_step_detail(4, "running", "分析时序特征和市场情绪...")
+
+        # 并行分析
+        features_task = asyncio.to_thread(TimeSeriesAnalyzer.analyze_features, df)
+        sentiment_task = self._analyze_sentiment(sentiment_result)
+
+        analysis_results = await asyncio.gather(
+            features_task,
+            sentiment_task,
+            return_exceptions=True
         )
-        session.save_news(news_list)
 
-        if sentiment_result:
-            emotion = EmotionAnalysis(
-                score=sentiment_result.get("overall_score", 0),
-                description=sentiment_result.get("sentiment", "中性")
+        features = analysis_results[0] if not isinstance(analysis_results[0], Exception) else {}
+        emotion_result = analysis_results[1] if not isinstance(analysis_results[1], Exception) else {}
+
+        # 保存情绪
+        if emotion_result:
+            session.save_emotion(
+                emotion_result.get("score", 0),
+                emotion_result.get("description", "中性")
             )
-            session.save_emotion(emotion)
-
-        session.update_step_detail(
-            2, "completed",
-            f"情绪: {sentiment_result.get('sentiment', '中性')} (得分: {sentiment_result.get('overall_score', 0):.2f})"
-        )
-
-        # Step 3: 时序特征分析
-        session.update_step_detail(3, "running", "分析时序特征...")
-
-        features = await asyncio.to_thread(TimeSeriesAnalyzer.analyze_features, df)
-
-        session.update_step_detail(
-            3, "completed",
-            f"趋势: {features['trend']}, 波动性: {features['volatility']}"
-        )
-
-        # Step 4: 参数智能推荐
-        session.update_step_detail(4, "running", "根据情绪推荐模型参数...")
-
-        prophet_params = await asyncio.to_thread(
-            self.sentiment_analyzer.recommend_params, sentiment_result, features
-        )
 
         session.update_step_detail(
             4, "completed",
-            f"推荐参数已生成: {prophet_params.get('reasoning', '')[:30]}..."
+            f"趋势: {features.get('trend', 'N/A')}, 情绪: {emotion_result.get('description', 'N/A')}"
         )
 
-        # Step 5: 模型训练与预测
-        session.update_step_detail(5, "running", f"训练 {model.upper()} 模型，预测 {forecast_horizon} 天...")
+        # === 阶段 4: 模型预测 ===
+        session.update_step_detail(5, "running", f"训练 {intent.forecast_model.upper()} 模型...")
 
-        forecast_result = await self._run_forecast(df, model, forecast_horizon, prophet_params)
+        # 获取推荐参数
+        prophet_params = await asyncio.to_thread(
+            self.sentiment_analyzer.recommend_params,
+            sentiment_result or {},
+            features
+        )
 
-        metrics_info = ", ".join([f"{k.upper()}: {v}" for k, v in forecast_result['metrics'].items()])
-        session.update_step_detail(5, "completed", f"{forecast_result['model'].upper()} 完成 ({metrics_info})")
+        # 运行预测
+        forecast_result = await self._run_forecast(
+            df,
+            intent.forecast_model,
+            intent.forecast_horizon,
+            prophet_params
+        )
 
-        # Step 6: 结果可视化（保存完整时序数据）
-        session.update_step_detail(6, "running", "生成图表中...")
-
-        # 合并历史和预测数据
+        # 保存预测结果
         full_points = original_points + self._forecast_to_points(forecast_result["forecast"])
         prediction_start = forecast_result["forecast"][0]["date"] if forecast_result["forecast"] else ""
         session.save_time_series_full(full_points, prediction_start)
 
-        session.update_step_detail(6, "completed", "图表已生成")
+        metrics_info = ", ".join([f"{k.upper()}: {v}" for k, v in forecast_result.get('metrics', {}).items()])
+        session.update_step_detail(5, "completed", f"预测完成 ({metrics_info})")
 
-        # Step 7: 报告生成
-        session.update_step_detail(7, "running", "生成分析报告...")
+        # === 阶段 5: 报告生成 ===
+        session.update_step_detail(6, "running", "生成分析报告...")
 
-        user_question = analysis_config.get("user_question", user_input)
         report = await asyncio.to_thread(
             self.finance_agent.reporter.generate,
-            user_question, features, forecast_result, sentiment_result, conversation_history
+            user_input,
+            features,
+            forecast_result,
+            sentiment_result or {},
+            conversation_history
         )
         session.save_conclusion(report)
 
-        session.update_step_detail(7, "completed", "分析报告已生成")
+        session.update_step_detail(6, "completed", "报告生成完成")
 
-    async def _fetch_news_and_sentiment(
+    async def _fetch_stock_data(self, stock_code: str, start_date: str, end_date: str):
+        """获取股票历史数据"""
+        data_config = {
+            "data_type": "stock_zh_a_hist",
+            "params": {
+                "symbol": stock_code,
+                "start_date": start_date,
+                "end_date": end_date,
+                "adjust": "qfq"
+            }
+        }
+
+        try:
+            raw_df = await asyncio.to_thread(DataFetcher.fetch, data_config)
+            df = await asyncio.to_thread(DataFetcher.prepare, raw_df, data_config)
+            return df
+        except Exception as e:
+            print(f"[Forecast] 获取股票数据失败: {e}")
+            return None
+
+    async def _fetch_news_combined(
         self,
-        stock_symbol: str,
-        stock_name: str
+        stock_code: str,
+        stock_name: str,
+        keywords: ResolvedKeywords
     ) -> tuple:
         """
-        获取新闻和情绪分析
+        获取合并新闻 (AkShare + Tavily)
 
-        分析请求始终使用 AkShare + Tavily 双数据源
+        Returns:
+            (news_items, sentiment_data)
         """
         news_items = []
         tavily_results = {"results": [], "count": 0}
 
-        # AkShare 新闻（始终获取）
-        news_df = await asyncio.to_thread(DataFetcher.fetch_news, stock_symbol, 50)
+        # AkShare 新闻
+        try:
+            news_df = await asyncio.to_thread(DataFetcher.fetch_news, stock_code, 50)
+        except Exception as e:
+            print(f"[News] AkShare 获取失败: {e}")
+            news_df = None
 
-        # Tavily 新闻（始终获取，用于补充和提供链接）
+        # Tavily 新闻
         try:
             from app.news import TavilyNewsClient
             tavily_client = TavilyNewsClient(settings.tavily_api_key)
+            search_query = " ".join(keywords.search_keywords[:3]) if keywords.search_keywords else stock_name
             tavily_results = await asyncio.to_thread(
                 tavily_client.search_stock_news,
-                stock_name=stock_name,
+                stock_name=search_query,
                 days=30,
                 max_results=10
             )
-            print(f"[Tavily] 找到 {tavily_results['count']} 条新闻")
-
-            # 转换为 NewsItem
-            for item in tavily_results.get("results", []):
-                news_items.append(NewsItem(
-                    title=item.get("title", ""),
-                    summary=item.get("content", "")[:200],
-                    date=item.get("published_date", ""),
-                    source="Tavily",
-                    url=item.get("url", "")
-                ))
         except Exception as e:
-            print(f"[Tavily] 搜索失败（降级为仅 AkShare）: {e}")
+            print(f"[News] Tavily 获取失败: {e}")
 
-        # AkShare 新闻转换
+        # 转换 AkShare 新闻
         if news_df is not None and not news_df.empty:
             for _, row in news_df.head(10).iterrows():
                 news_items.append(NewsItem(
                     title=row.get("新闻标题", ""),
-                    summary=row.get("新闻内容", "")[:200] if row.get("新闻内容") else "",
-                    date=str(row.get("发布时间", "")),
-                    source="AkShare",
-                    url=""
+                    content=row.get("新闻内容", "")[:300] if row.get("新闻内容") else "",
+                    url="",
+                    published_date=str(row.get("发布时间", "")),
+                    source_type="domain_info"
                 ))
 
-        # 情绪分析（始终使用带链接版本，因为始终有 Tavily）
-        sentiment_result = {}
-        if tavily_results.get("count", 0) > 0:
-            # 有 Tavily 结果：使用带链接分析
-            sentiment_result = await asyncio.to_thread(
-                self.sentiment_analyzer.analyze_with_links,
-                news_df, tavily_results
-            )
-        elif news_df is not None and not news_df.empty:
-            # 仅 AkShare：使用原有分析
-            sentiment_result = await asyncio.to_thread(
-                self.sentiment_analyzer.analyze, news_df
-            )
-        else:
-            sentiment_result = {"sentiment": "中性", "overall_score": 0, "news_count": 0}
+        # 转换 Tavily 新闻
+        for item in tavily_results.get("results", []):
+            news_items.append(NewsItem(
+                title=item.get("title", ""),
+                content=item.get("content", "")[:300],
+                url=item.get("url", ""),
+                published_date=item.get("published_date", ""),
+                source_type="search"
+            ))
 
-        return news_items, sentiment_result
+        # 构建情感分析数据
+        sentiment_data = {
+            "news_df": news_df,
+            "tavily_results": tavily_results,
+            "news_count": len(news_items)
+        }
+
+        return news_items, sentiment_data
+
+    async def _fetch_rag_reports(self, keywords: List[str]) -> List[RAGSource]:
+        """检索研报"""
+        if not keywords:
+            return []
+
+        try:
+            query = " ".join(keywords[:3])
+            docs = await asyncio.to_thread(
+                self.rag_agent.search_reports,
+                query,
+                5
+            )
+
+            return [
+                RAGSource(
+                    filename=doc["file_name"],
+                    page=doc["page_number"],
+                    content_snippet=doc.get("content", "")[:200],
+                    score=doc["score"]
+                )
+                for doc in docs
+            ]
+        except Exception as e:
+            print(f"[RAG] 研报检索失败: {e}")
+            return []
+
+    async def _analyze_sentiment(self, sentiment_data: dict) -> dict:
+        """分析情感"""
+        if not sentiment_data or sentiment_data.get("news_count", 0) == 0:
+            return {"score": 0, "description": "中性"}
+
+        try:
+            news_df = sentiment_data.get("news_df")
+            tavily_results = sentiment_data.get("tavily_results", {})
+
+            if tavily_results.get("count", 0) > 0:
+                result = await asyncio.to_thread(
+                    self.sentiment_analyzer.analyze_with_links,
+                    news_df,
+                    tavily_results
+                )
+            elif news_df is not None and not news_df.empty:
+                result = await asyncio.to_thread(
+                    self.sentiment_analyzer.analyze,
+                    news_df
+                )
+            else:
+                return {"score": 0, "description": "中性"}
+
+            return {
+                "score": result.get("overall_score", 0),
+                "description": result.get("sentiment", "中性"),
+                "raw": result
+            }
+        except Exception as e:
+            print(f"[Sentiment] 分析失败: {e}")
+            return {"score": 0, "description": "中性"}
 
     async def _run_forecast(
         self,
@@ -351,7 +500,7 @@ class UnifiedTaskProcessor:
             return await asyncio.to_thread(forecaster.forecast, df, horizon)
 
     def _df_to_points(self, df, is_prediction: bool = False) -> List[TimeSeriesPoint]:
-        """DataFrame 转换为时序数据点列表"""
+        """DataFrame 转换为时序数据点"""
         points = []
         for _, row in df.iterrows():
             points.append(TimeSeriesPoint(
@@ -362,215 +511,169 @@ class UnifiedTaskProcessor:
         return points
 
     def _forecast_to_points(self, forecast: List[dict]) -> List[TimeSeriesPoint]:
-        """预测结果转换为时序数据点列表"""
-        points = []
-        for item in forecast:
-            points.append(TimeSeriesPoint(
+        """预测结果转换为时序数据点"""
+        return [
+            TimeSeriesPoint(
                 date=item["date"],
                 value=item["value"],
                 is_prediction=True
-            ))
-        return points
+            )
+            for item in forecast
+        ]
 
-    # ========== RAG 流程（2步） ==========
+    # ========== 非预测流程 ==========
 
-    async def _execute_rag(
+    async def _execute_chat_v3(
         self,
         session: Session,
         user_input: str,
+        intent: UnifiedIntent,
+        stock_match: Optional[StockMatchResult],
+        keywords: ResolvedKeywords,
         conversation_history: List[dict]
     ):
-        """执行 RAG 研报检索流程"""
-        # Step 1: 研报检索
-        session.update_step_detail(1, "running", "正在检索相关研报...")
+        """
+        执行非预测流程 (V3)
 
-        retrieved_docs = await asyncio.to_thread(
-            self.rag_agent.search_reports, user_input, 5
-        )
+        根据工具开关并行获取数据，生成带引用的 Markdown 回答
+        """
+        # 确定步骤号 (股票验证后)
+        step_num = 3 if intent.stock_mention else 2
 
-        # 保存 RAG 来源
-        sources = [
-            RAGSource(
-                file_name=doc["file_name"],
-                page_number=doc["page_number"],
-                score=doc["score"],
-                content=doc.get("content", "")[:200]
-            )
-            for doc in retrieved_docs
-        ]
-        session.save_rag_sources(sources)
+        # === 并行数据获取 ===
+        session.update_step_detail(step_num, "running", "获取相关信息...")
 
-        session.update_step_detail(1, "completed", f"找到 {len(sources)} 条相关内容")
+        tasks = []
+        task_names = []
 
-        # Step 2: 生成回答
-        session.update_step_detail(2, "running", "基于研报内容生成回答...")
+        # RAG 检索
+        if intent.enable_rag:
+            tasks.append(self._fetch_rag_reports(keywords.rag_keywords))
+            task_names.append("rag")
 
+        # 网络搜索
+        if intent.enable_search:
+            tasks.append(self._search_web(keywords.search_keywords))
+            task_names.append("search")
+
+        # 领域信息
+        if intent.enable_domain_info:
+            stock_code = stock_match.stock_info.stock_code if stock_match and stock_match.stock_info else ""
+            tasks.append(self._fetch_domain_news(stock_code, keywords.domain_keywords))
+            task_names.append("domain")
+
+        results = {}
+        if tasks:
+            task_results = await asyncio.gather(*tasks, return_exceptions=True)
+            for name, result in zip(task_names, task_results):
+                if not isinstance(result, Exception):
+                    results[name] = result
+
+        session.update_step_detail(step_num, "completed", f"获取完成: {list(results.keys())}")
+
+        # === 生成回答 ===
+        step_num += 1
+        session.update_step_detail(step_num, "running", "生成回答...")
+
+        # 构建上下文
+        context_parts = []
+
+        if "rag" in results and results["rag"]:
+            context_parts.append("=== 研报内容 ===")
+            for source in results["rag"][:5]:
+                context_parts.append(f"[{source.filename} 第{source.page}页]: {source.content_snippet}")
+
+        if "search" in results and results["search"]:
+            context_parts.append("\n=== 网络搜索 ===")
+            for item in results["search"][:5]:
+                context_parts.append(f"[{item.get('title', '')}]({item.get('url', '')}): {item.get('content', '')[:100]}")
+
+        if "domain" in results and results["domain"]:
+            context_parts.append("\n=== 即时新闻 ===")
+            for item in results["domain"][:5]:
+                context_parts.append(f"- {item.get('title', '')}: {item.get('content', '')[:100]}")
+
+        context = "\n".join(context_parts) if context_parts else ""
+
+        # 生成回答
         answer = await asyncio.to_thread(
-            self.rag_agent.generate_answer, user_input, retrieved_docs, conversation_history
+            self.intent_agent.generate_chat_response,
+            user_input,
+            conversation_history,
+            context
         )
+
         session.save_conclusion(answer)
 
-        session.update_step_detail(2, "completed", "回答生成完成")
+        # 保存来源
+        if "rag" in results:
+            session.save_rag_sources(results["rag"])
 
-    # ========== 新闻流程（3步） ==========
+        session.update_step_detail(step_num, "completed", "回答完成")
 
-    async def _execute_news(
-        self,
-        session: Session,
-        user_input: str,
-        conversation_history: List[dict]
-    ):
-        """执行新闻搜索流程"""
-        from app.news import TavilyNewsClient
-
-        # Step 1: 解析查询，提取关键词
-        session.update_step_detail(1, "running", "正在解析搜索意图...")
+    async def _search_web(self, keywords: List[str]) -> List[dict]:
+        """网络搜索"""
+        if not keywords:
+            return []
 
         try:
-            # 使用 LLM 提取关键词
-            keyword_result = await asyncio.to_thread(
-                self.intent_agent.extract_search_keywords,
-                user_input
-            )
-            keywords = keyword_result.get("keywords", user_input)
-            is_stock = keyword_result.get("is_stock", False)
-            stock_name = keyword_result.get("stock_name", "")
-            stock_code = keyword_result.get("stock_code", "")
-
-            print(f"[News] 关键词提取: keywords={keywords}, is_stock={is_stock}, stock_name={stock_name}, stock_code={stock_code}")
-
-            session.update_step_detail(1, "completed", f"关键词: {keywords}")
-
-            # Step 2: 新闻搜索
-            session.update_step_detail(2, "running", "正在搜索相关新闻...")
-
+            from app.news import TavilyNewsClient
             tavily_client = TavilyNewsClient(settings.tavily_api_key)
-            tavily_results = {"results": [], "count": 0}
-            akshare_news_df = None
-            news_items = []
-
-            # 根据是否股票相关选择数据源
-            if is_stock and stock_code:
-                # 股票相关：使用 AkShare + Tavily
-                print(f"[News] 股票搜索模式: AkShare + Tavily")
-
-                akshare_news_df = await asyncio.to_thread(DataFetcher.fetch_news, stock_code, 50)
-                tavily_results = await asyncio.to_thread(
-                    tavily_client.search_stock_news,
-                    stock_name=stock_name or keywords,
-                    days=30,
-                    max_results=10
-                )
-
-                # AkShare 新闻转换
-                if akshare_news_df is not None and not akshare_news_df.empty:
-                    for _, row in akshare_news_df.head(10).iterrows():
-                        news_items.append(NewsItem(
-                            title=row.get("新闻标题", ""),
-                            summary=row.get("新闻内容", "")[:200] if row.get("新闻内容") else "",
-                            date=str(row.get("发布时间", "")),
-                            source="AkShare",
-                            url=""
-                        ))
-            else:
-                # 非股票：仅 Tavily（使用中文域名过滤）
-                print(f"[News] 通用搜索模式: Tavily only")
-                tavily_results = await asyncio.to_thread(
-                    tavily_client.search_stock_news,
-                    stock_name=keywords,
-                    days=30,
-                    max_results=10
-                )
-
-            # Tavily 新闻转换
-            for item in tavily_results.get("results", []):
-                news_items.append(NewsItem(
-                    title=item.get("title", ""),
-                    summary=item.get("content", "")[:200],
-                    date=item.get("published_date", ""),
-                    source="Tavily",
-                    url=item.get("url", "")
-                ))
-
-            session.save_news(news_items)
-
-            akshare_count = len(akshare_news_df) if akshare_news_df is not None and not akshare_news_df.empty else 0
-            tavily_count = tavily_results.get("count", 0)
-            total_count = akshare_count + tavily_count
-
-            print(f"[News] 找到新闻: AkShare={akshare_count}, Tavily={tavily_count}, 总计={total_count}")
-
-            session.update_step_detail(2, "completed", f"找到 {total_count} 条相关新闻")
-
-            # Step 3: 新闻总结
-            session.update_step_detail(3, "running", "生成新闻摘要...")
-
-            # 构建综合新闻上下文
-            news_context_parts = []
-
-            # AkShare 新闻（无 URL）
-            if akshare_news_df is not None and not akshare_news_df.empty:
-                news_context_parts.append("=== 即时新闻（AkShare）===")
-                for _, row in akshare_news_df.head(15).iterrows():
-                    title = row.get("新闻标题", row.get("标题", ""))
-                    content = str(row.get("新闻内容", row.get("内容", "")))[:100]
-                    if title:
-                        news_context_parts.append(f"- {title}: {content}")
-
-            # Tavily 新闻（有 URL）
-            if tavily_results.get("results"):
-                news_context_parts.append("\n=== 网络新闻（Tavily，带URL）===")
-                for item in tavily_results["results"]:
-                    title = item.get("title", "")
-                    url = item.get("url", "")
-                    content = item.get("content", "")[:100]
-                    news_context_parts.append(f"- 【{title}】({url}): {content}")
-
-            news_context = "\n".join(news_context_parts) if news_context_parts else "未找到相关新闻。"
-
-            # 流式生成转为同步
-            full_answer = ""
-            for chunk in self.intent_agent.summarize_news_stream(user_input, news_context, conversation_history):
-                full_answer += chunk
-
-            session.save_conclusion(full_answer)
-            session.update_step_detail(3, "completed", "总结完成")
-
-        except ValueError as e:
-            session.update_step_detail(1, "error", f"新闻搜索服务未配置: {str(e)}")
-            session.save_conclusion(f"新闻搜索服务未配置: {str(e)}")
+            query = " ".join(keywords[:3])
+            result = await asyncio.to_thread(
+                tavily_client.search,
+                query=query,
+                days=30,
+                max_results=10
+            )
+            return result.get("results", [])
         except Exception as e:
-            session.update_step_detail(1, "error", f"新闻搜索失败: {str(e)}")
-            session.save_conclusion(f"新闻搜索失败: {str(e)}")
+            print(f"[Search] 搜索失败: {e}")
+            return []
 
-    # ========== 对话流程（1步） ==========
+    async def _fetch_domain_news(self, stock_code: str, keywords: List[str]) -> List[dict]:
+        """获取领域新闻 (AkShare)"""
+        if not stock_code and not keywords:
+            return []
 
-    async def _execute_chat(
-        self,
-        session: Session,
-        user_input: str,
-        conversation_history: List[dict]
-    ):
-        """执行纯对话流程"""
-        # Step 1: 生成回答
-        session.update_step_detail(1, "running", "生成回答...")
+        try:
+            if stock_code:
+                news_df = await asyncio.to_thread(DataFetcher.fetch_news, stock_code, 20)
+            else:
+                # 如果没有股票代码，尝试搜索关键词
+                # 这里简化处理，返回空
+                return []
 
-        # 流式生成转为同步
-        full_answer = ""
-        for chunk in self.intent_agent.answer_question_stream(user_input, conversation_history):
-            full_answer += chunk
+            if news_df is None or news_df.empty:
+                return []
 
-        session.save_conclusion(full_answer)
-        session.update_step_detail(1, "completed", "回答完成")
+            items = []
+            for _, row in news_df.head(10).iterrows():
+                items.append({
+                    "title": row.get("新闻标题", ""),
+                    "content": row.get("新闻内容", "")[:200] if row.get("新闻内容") else "",
+                    "date": str(row.get("发布时间", ""))
+                })
+            return items
+        except Exception as e:
+            print(f"[Domain] 获取新闻失败: {e}")
+            return []
+
+
+# ========== 兼容旧版 ==========
+
+class UnifiedTaskProcessor(UnifiedTaskProcessorV3):
+    """兼容旧版名称"""
+    pass
 
 
 # 单例获取
-_task_processor: Optional[UnifiedTaskProcessor] = None
+_task_processor: Optional[UnifiedTaskProcessorV3] = None
 
 
-def get_task_processor(api_key: str) -> UnifiedTaskProcessor:
+def get_task_processor(api_key: str) -> UnifiedTaskProcessorV3:
     """获取任务处理器单例"""
     global _task_processor
     if _task_processor is None:
-        _task_processor = UnifiedTaskProcessor(api_key)
+        _task_processor = UnifiedTaskProcessorV3(api_key)
     return _task_processor

@@ -56,3 +56,6 @@ huggingface/
 
 # Qdrant storage
 qdrant_storage/
+
+# Embedded repositories
+xiaoyi-rag-service/

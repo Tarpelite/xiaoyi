@@ -166,7 +166,7 @@ export function ChatArea() {
       // 只有在有消息、不在加载中、且有sessionId时才更新
       if (messages.length > 0 && !isLoading && sessionId) {
         try {
-          const { getSuggestions } = await import('@/lib/api/chat')
+          const { getSuggestions } = await import('@/lib/api/analysis')
           const suggestions = await getSuggestions(sessionId)
           if (suggestions && suggestions.length > 0) {
             setQuickSuggestions(suggestions)
