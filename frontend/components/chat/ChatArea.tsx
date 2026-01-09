@@ -99,12 +99,12 @@ export interface Message {
 
 // 预测步骤定义（7个步骤）- 与后端 STEPS 保持一致
 export const PREDICTION_STEPS: Omit<Step, 'status' | 'message'>[] = [
-  { id: '1', name: '数据获取与预处理' },
-  { id: '2', name: '新闻获取与情绪分析' },
-  { id: '3', name: '时序特征分析' },
-  { id: '4', name: '参数智能推荐' },
-  { id: '5', name: '模型训练与预测' },
-  { id: '6', name: '结果可视化' },
+  { id: '1', name: '数据获取' },
+  { id: '2', name: '新闻搜索' },
+  { id: '3', name: '情绪分析' },
+  { id: '4', name: '智能建模' },
+  { id: '5', name: '时序预测' },
+  { id: '6', name: '结果渲染' },
   { id: '7', name: '报告生成' },
 ]
 
@@ -343,37 +343,72 @@ export function ChatArea() {
       })
     }
 
-    // 3. 价格预测趋势图（步骤6完成后显示）
-    // 只有当步骤 >= 6 或已完成时，才显示预测图表
-    if ((currentStep >= 6 || isCompleted) && data.time_series_full && data.time_series_full.length > 0 && data.prediction_done) {
-      const originalLength = data.time_series_original?.length || 0
-      const allLabels = data.time_series_full.map((p) => p.date)
-      const historicalData = data.time_series_full.map((p, idx) =>
-        idx < originalLength ? p.value : null
-      )
-      const forecastData = data.time_series_full.map((p, idx) =>
-        idx >= originalLength ? p.value : null
-      )
+    // 3. 价格走势图表（分步渲染）
+    // 步骤2-3：如果有原始数据，先渲染历史价格
+    if ((currentStep >= 2 || isCompleted) && data.time_series_original && data.time_series_original.length > 0) {
+      const hasForecast = data.prediction_done && data.time_series_full && data.time_series_full.length > 0
+      
+      if (hasForecast && (currentStep >= 6 || isCompleted) && data.time_series_full) {
+        // 步骤6+：同时显示历史和预测价格
+        const originalLength = data.time_series_original.length
+        const allLabels = data.time_series_full.map((p) => p.date)
+        // 历史价格：包含到最后一个历史数据点，之后为null
+        const historicalData = data.time_series_full.map((p, idx) =>
+          idx < originalLength ? p.value : null
+        )
+        // 预测价格：从最后一个历史数据点开始（使用历史价格的最后一个值），之后为预测值
+        const lastHistoricalValue = data.time_series_full[originalLength - 1]?.value
+        const forecastData = data.time_series_full.map((p, idx) => {
+          if (idx < originalLength - 1) {
+            return null
+          } else if (idx === originalLength - 1) {
+            // 交接点：使用历史价格的最后一个值，使两条曲线连接
+            return lastHistoricalValue
+          } else {
+            // 预测值
+            return p.value
+          }
+        })
 
-      contents.push({
-        type: 'chart',
-        title: '', // 标题由外层MessageBubble显示"价格走势分析"，这里不重复显示
-        data: {
-          labels: allLabels,
-          datasets: [
-            {
-              label: '历史价格',
-              data: historicalData,
-              color: '#8b5cf6'
-            },
-            {
-              label: '预测价格',
-              data: forecastData,
-              color: '#06b6d4'
-            }
-          ]
-        }
-      })
+        contents.push({
+          type: 'chart',
+          title: '', // 标题由外层MessageBubble显示"价格走势分析"，这里不重复显示
+          data: {
+            labels: allLabels,
+            datasets: [
+              {
+                label: '历史价格',
+                data: historicalData,
+                color: '#8b5cf6'
+              },
+              {
+                label: '预测价格',
+                data: forecastData,
+                color: '#06b6d4'
+              }
+            ]
+          }
+        })
+      } else {
+        // 步骤2-5：只显示历史价格
+        const historicalLabels = data.time_series_original.map((p) => p.date)
+        const historicalData = data.time_series_original.map((p) => p.value)
+
+        contents.push({
+          type: 'chart',
+          title: '', // 标题由外层MessageBubble显示"价格走势分析"，这里不重复显示
+          data: {
+            labels: historicalLabels,
+            datasets: [
+              {
+                label: '历史价格',
+                data: historicalData,
+                color: '#8b5cf6'
+              }
+            ]
+          }
+        })
+      }
     }
 
     // 4. 综合分析报告（步骤7完成后显示）

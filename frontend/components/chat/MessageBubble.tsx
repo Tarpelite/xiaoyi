@@ -315,11 +315,12 @@ export function MessageBubble({ message }: MessageBubbleProps) {
                   t.type === 'text' && !t.text.startsWith('__EMOTION_MARKER__')
                 ).pop() // 取最后一个文本作为报告
 
-                // 识别价格预测趋势图（标题包含"预测"）
+                // 识别价格走势图表（包含"历史价格"或"预测价格"）
                 const priceChart = charts.find(c =>
                   c.type === 'chart' && (
                     c.title?.includes('预测') ||
-                    c.data.datasets.some(d => d.label?.includes('预测'))
+                    c.title?.includes('走势') ||
+                    c.data.datasets.some(d => d.label?.includes('价格'))
                   )
                 )
 
