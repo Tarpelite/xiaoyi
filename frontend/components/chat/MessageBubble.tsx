@@ -236,7 +236,10 @@ export function MessageBubble({ message }: MessageBubbleProps) {
                 )
               }
 
-              if (hasContents || displayText) {
+              // 如果有步骤进度条，或者有结构化内容，显示四个结构化部分
+              const hasSteps = message.steps && message.steps.length > 0
+              
+              if (hasContents || displayText || hasSteps) {
                 // 分类内容：图表、表格、文本
                 const charts = contents.filter(c => c.type === 'chart')
                 const tables = contents.filter(c => c.type === 'table')
@@ -247,8 +250,9 @@ export function MessageBubble({ message }: MessageBubbleProps) {
                   t.type === 'text' && t.text.startsWith('__EMOTION_MARKER__')
                 )
 
-                // 判断是否是简单问答：只有文本内容，没有图表、表格、情绪标记
-                const isSimpleAnswer = charts.length === 0 &&
+                // 判断是否是简单问答：只有文本内容，没有图表、表格、情绪标记，且没有步骤进度条
+                const isSimpleAnswer = !hasSteps &&
+                  charts.length === 0 &&
                   tables.length === 0 &&
                   !emotionText &&
                   texts.length > 0 &&
@@ -355,7 +359,10 @@ export function MessageBubble({ message }: MessageBubbleProps) {
                         {emotionData ? (
                           <EmotionGauge emotion={emotionData.score} description={emotionData.description} />
                         ) : (
-                          <div className="text-sm text-gray-400">情绪分析中...</div>
+                          <div className="text-sm text-gray-400 flex items-center gap-2">
+                            <div className="w-2 h-2 bg-violet-400 rounded-full animate-pulse" />
+                            <span>情绪分析中...</span>
+                          </div>
                         )}
                       </div>
 
@@ -367,52 +374,43 @@ export function MessageBubble({ message }: MessageBubbleProps) {
                         {newsTable ? (
                           <MessageContent content={newsTable} />
                         ) : (
-                          <div className="text-sm text-gray-400">暂无新闻数据</div>
+                          <div className="text-sm text-gray-400 flex items-center gap-2">
+                            <div className="w-2 h-2 bg-violet-400 rounded-full animate-pulse" />
+                            <span>正在获取新闻...</span>
+                          </div>
                         )}
                       </div>
                     </div>
 
                     {/* 价格预测趋势图（全宽） */}
-                    {priceChart ? (
-                      <div className="glass rounded-2xl p-4">
-                        <h3 className="text-sm font-semibold text-gray-300 mb-3 flex items-center gap-2">
-                          <span>📈</span> 价格走势分析
-                        </h3>
+                    <div className="glass rounded-2xl p-4">
+                      <h3 className="text-sm font-semibold text-gray-300 mb-3 flex items-center gap-2">
+                        <span>📈</span> 价格走势分析
+                      </h3>
+                      {priceChart ? (
                         <MessageContent content={priceChart} />
-                      </div>
-                    ) : (
-                      // 如果图表未生成，显示加载状态
-                      <div className="glass rounded-2xl p-4">
-                        <h3 className="text-sm font-semibold text-gray-300 mb-3 flex items-center gap-2">
-                          <span>📈</span> 价格走势分析
-                        </h3>
+                      ) : (
                         <div className="text-sm text-gray-400 flex items-center gap-2 h-64 items-center justify-center">
                           <div className="w-2 h-2 bg-violet-400 rounded-full animate-pulse" />
                           <span>正在生成预测图表...</span>
                         </div>
-                      </div>
-                    )}
+                      )}
+                    </div>
 
                     {/* 综合分析报告（全宽，最后） */}
-                    {reportText ? (
-                      <div className="glass rounded-2xl p-4">
-                        <h3 className="text-sm font-semibold text-gray-300 mb-3 flex items-center gap-2">
-                          <span>📝</span> 综合分析报告
-                        </h3>
+                    <div className="glass rounded-2xl p-4">
+                      <h3 className="text-sm font-semibold text-gray-300 mb-3 flex items-center gap-2">
+                        <span>📝</span> 综合分析报告
+                      </h3>
+                      {reportText ? (
                         <MessageContent content={reportText} />
-                      </div>
-                    ) : (
-                      // 如果报告未生成，显示加载状态
-                      <div className="glass rounded-2xl p-4">
-                        <h3 className="text-sm font-semibold text-gray-300 mb-3 flex items-center gap-2">
-                          <span>📝</span> 综合分析报告
-                        </h3>
+                      ) : (
                         <div className="text-sm text-gray-400 flex items-center gap-2">
                           <div className="w-2 h-2 bg-violet-400 rounded-full animate-pulse" />
                           <span>正在生成分析报告...</span>
                         </div>
-                      </div>
-                    )}
+                      )}
+                    </div>
 
                     {/* 其他未分类的内容（向后兼容） */}
                     {contents.filter(c => {
