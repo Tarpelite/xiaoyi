@@ -1,19 +1,7 @@
 services:
-  # ===== Qdrant 向量数据库 =====
-  qdrant:
-    image: qdrant/qdrant:latest
-    container_name: xiaoyi-qdrant
-    restart: unless-stopped
-    ports:
-      - "6333:6333"
-    volumes:
-      - ./qdrant_storage:/qdrant/storage
-    networks:
-      - xiaoyi-network
-
   # ===== Redis 服务 =====
   redis:
-    image: redis:7-alpine
+    image: aqtbrodh2awvkc.xuanyuan.run/redis:7-alpine
     container_name: xiaoyi-redis
     restart: unless-stopped
     ports:
@@ -60,21 +48,11 @@ services:
       - "18000:8000"
     environment:
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
-      - TAVILY_API_KEY=${TAVILY_API_KEY}
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - REDIS_DB=0
       - TZ=Asia/Shanghai
-      - QDRANT_HOST=qdrant
-      - QDRANT_PORT=6333
-      - HF_ENDPOINT=https://hf-mirror.com
-      - HF_TOKEN=${HF_TOKEN}
-    volumes:
-      - ./energy_reports_test:/app/energy_reports_test
-      - ${HOME}/.cache/huggingface:/root/.cache/huggingface
     depends_on:
-      qdrant:
-        condition: service_started
       redis:
         condition: service_healthy
     healthcheck:

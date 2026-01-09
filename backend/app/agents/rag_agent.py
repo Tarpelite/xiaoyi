@@ -74,44 +74,41 @@ class RAGAgent:
             return self._search_local(query, top_k)
 
     def _search_remote(self, query: str, top_k: int) -> List[Dict[str, Any]]:
-        """使用远程服务搜索"""
-        import asyncio
+        """使用远程服务搜索（同步版本）"""
+        import httpx
         
-        async def _async_search():
-            results = await self.report_client.search_reports(
-                query=query,
-                top_k=top_k,
-                use_rerank=True,
-            )
-            return results
-        
-        # 在新的事件循环中运行
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # 如果已有事件循环在运行，创建新任务
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(asyncio.run, _async_search())
-                    results = future.result()
-            else:
-                results = asyncio.run(_async_search())
-        except RuntimeError:
-            results = asyncio.run(_async_search())
-        
-        # 转换为统一格式
-        formatted_results = []
-        for r in results:
-            formatted_results.append({
-                "content": r.content,
-                "file_name": r.file_name,
-                "page_number": r.page_number,
-                "score": r.rerank_score or r.score,
-                "doc_id": r.doc_id,
-                "chunk_id": r.chunk_id,
-            })
-        
-        return formatted_results
+            # 使用同步 HTTP 客户端，避免事件循环问题
+            with httpx.Client(timeout=30.0) as client:
+                resp = client.post(
+                    f"{settings.report_service_url}/api/v1/search",
+                    json={
+                        "query": query,
+                        "top_k": top_k,
+                        "mode": "hybrid",
+                        "use_rerank": True,
+                    }
+                )
+                resp.raise_for_status()
+                data = resp.json()
+            
+            # 转换为统一格式
+            formatted_results = []
+            for item in data.get("results", []):
+                formatted_results.append({
+                    "content": item.get("content", ""),
+                    "file_name": item.get("file_name", ""),
+                    "page_number": item.get("page_number", 0),
+                    "score": item.get("rerank_score") or item.get("score", 0),
+                    "doc_id": item.get("doc_id", ""),
+                    "chunk_id": item.get("chunk_id", ""),
+                })
+            
+            return formatted_results
+            
+        except Exception as e:
+            print(f"[RAGAgent] 远程搜索失败: {e}")
+            return []
 
     def _search_local(self, query: str, top_k: int) -> List[Dict[str, Any]]:
         """使用本地服务搜索（向后兼容）"""
@@ -192,7 +189,7 @@ class RAGAgent:
         # 构建上下文
         context = self._build_context(retrieved_docs)
 
-        system_prompt = """你是专业的行业研究分析师。基于提供的研报内容回答用户问题。
+        system_prompt = """你是专业的能源行业研究分析师。基于提供的研报内容回答用户问题。
 
 要求：
 1. 回答必须基于提供的研报内容，不要编造信息
@@ -244,7 +241,7 @@ class RAGAgent:
         """
         context = self._build_context(retrieved_docs)
 
-        system_prompt = """你是专业的行业研究分析师。基于提供的研报内容回答用户问题。
+        system_prompt = """你是专业的能源行业研究分析师。基于提供的研报内容回答用户问题。
 
 要求：
 1. 回答必须基于提供的研报内容，不要编造信息
