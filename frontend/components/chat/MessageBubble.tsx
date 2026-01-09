@@ -30,9 +30,9 @@ function EmotionGauge({ emotion, description }: { emotion: number; description: 
   }
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-3">
       {/* 仪表盘容器 */}
-      <div className="relative w-full" style={{ height: '140px' }}>
+      <div className="relative w-full" style={{ height: '120px' }}>
         <svg 
           className="w-full h-full" 
           viewBox="0 0 240 120" 
@@ -119,15 +119,15 @@ function EmotionGauge({ emotion, description }: { emotion: number; description: 
       </div>
 
       {/* 情绪值显示 */}
-      <div className="text-center space-y-3">
-        <div className={`flex items-center justify-center gap-2.5 ${getEmotionColor(emotion)}`}>
+      <div className="text-center space-y-2">
+        <div className={`flex items-center justify-center gap-2 ${getEmotionColor(emotion)}`}>
           {getEmotionIcon(emotion)}
-          <span className="text-2xl font-bold tracking-tight">
+          <span className="text-xl font-bold tracking-tight">
             {emotion > 0 ? '+' : ''}{emotion.toFixed(2)}
           </span>
         </div>
         {description && (
-          <div className="bg-dark-700/40 rounded-lg px-4 py-2.5 border border-white/5">
+          <div className="bg-dark-700/40 rounded-lg px-3 py-2 border border-white/5">
             <p className="text-xs text-gray-300 leading-relaxed">{description}</p>
           </div>
         )}
@@ -351,9 +351,9 @@ export function MessageBubble({ message }: MessageBubbleProps) {
                     message.isCollapsing && "animate-collapse"
                   )}>
                     {/* 四个结构化部分 */}
-                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                    <div className="grid grid-cols-1 lg:grid-cols-[1fr_2fr] gap-4">
                       {/* 市场情绪区域（左侧上方） */}
-                      <div className="glass rounded-2xl p-4">
+                      <div className="glass rounded-2xl p-4 max-w-md">
                         <h3 className="text-sm font-semibold text-gray-300 mb-3 flex items-center gap-2">
                           <span>😊</span> 市场情绪
                         </h3>
