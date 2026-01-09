@@ -22,3 +22,5 @@ qdrant-client>=1.7.0
 FlagEmbedding>=1.2.0
 PyMuPDF>=1.23.0
 jieba>=0.42.1
+httpx==0.28.1
+loguru==0.7.3

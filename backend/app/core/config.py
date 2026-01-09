@@ -14,6 +14,9 @@ class Settings:
     DEEPSEEK_API_KEY: str = os.getenv("DEEPSEEK_API_KEY", "")
     TAVILY_API_KEY: str = os.getenv("TAVILY_API_KEY", "")
     
+    # 研报 RAG 服务配置
+    REPORT_SERVICE_URL: str = os.getenv("REPORT_SERVICE_URL", "http://10.139.197.44:8000")
+    
     # Server settings
     HOST: str = os.getenv("HOST", "0.0.0.0")
     PORT: int = int(os.getenv("PORT", "8000"))
@@ -38,5 +41,10 @@ class Settings:
         if not self.TAVILY_API_KEY:
             raise ValueError("TAVILY_API_KEY not set in environment variables")
         return self.TAVILY_API_KEY
+
+    @property
+    def report_service_url(self) -> str:
+        """Get Report RAG Service URL"""
+        return self.REPORT_SERVICE_URL
 
 settings = Settings()
