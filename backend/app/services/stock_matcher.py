@@ -43,6 +43,125 @@ STOCK_COLLECTION_NAME = "stocks_info"
 HIGH_CONFIDENCE_THRESHOLD = 0.85  # 高置信度匹配
 LOW_CONFIDENCE_THRESHOLD = 0.5   # 低置信度匹配
 
+# 常用股票的 Fallback 映射 (当 Qdrant 不可用时使用)
+COMMON_STOCKS_FALLBACK = {
+    # 白酒
+    "茅台": ("600519", "贵州茅台", "SH"),
+    "贵州茅台": ("600519", "贵州茅台", "SH"),
+    "茅子": ("600519", "贵州茅台", "SH"),
+    "五粮液": ("000858", "五粮液", "SZ"),
+    "泸州老窖": ("000568", "泸州老窖", "SZ"),
+    "洋河股份": ("002304", "洋河股份", "SZ"),
+    "洋河": ("002304", "洋河股份", "SZ"),
+    "山西汾酒": ("600809", "山西汾酒", "SH"),
+    "汾酒": ("600809", "山西汾酒", "SH"),
+    "古井贡酒": ("000596", "古井贡酒", "SZ"),
+    # 银行
+    "工商银行": ("601398", "工商银行", "SH"),
+    "工行": ("601398", "工商银行", "SH"),
+    "建设银行": ("601939", "建设银行", "SH"),
+    "建行": ("601939", "建设银行", "SH"),
+    "农业银行": ("601288", "农业银行", "SH"),
+    "农行": ("601288", "农业银行", "SH"),
+    "中国银行": ("601988", "中国银行", "SH"),
+    "中行": ("601988", "中国银行", "SH"),
+    "招商银行": ("600036", "招商银行", "SH"),
+    "招行": ("600036", "招商银行", "SH"),
+    "平安银行": ("000001", "平安银行", "SZ"),
+    "交通银行": ("601328", "交通银行", "SH"),
+    "交行": ("601328", "交通银行", "SH"),
+    "兴业银行": ("601166", "兴业银行", "SH"),
+    "浦发银行": ("600000", "浦发银行", "SH"),
+    # 保险
+    "中国平安": ("601318", "中国平安", "SH"),
+    "平安": ("601318", "中国平安", "SH"),
+    "中国人寿": ("601628", "中国人寿", "SH"),
+    "人寿": ("601628", "中国人寿", "SH"),
+    "中国太保": ("601601", "中国太保", "SH"),
+    "太保": ("601601", "中国太保", "SH"),
+    "新华保险": ("601336", "新华保险", "SH"),
+    # 新能源/汽车
+    "宁德时代": ("300750", "宁德时代", "SZ"),
+    "宁德": ("300750", "宁德时代", "SZ"),
+    "CATL": ("300750", "宁德时代", "SZ"),
+    "比亚迪": ("002594", "比亚迪", "SZ"),
+    "隆基绿能": ("601012", "隆基绿能", "SH"),
+    "隆基": ("601012", "隆基绿能", "SH"),
+    "阳光电源": ("300274", "阳光电源", "SZ"),
+    "长城汽车": ("601633", "长城汽车", "SH"),
+    "长城": ("601633", "长城汽车", "SH"),
+    "上汽集团": ("600104", "上汽集团", "SH"),
+    "上汽": ("600104", "上汽集团", "SH"),
+    # 科技/互联网 (港股)
+    "腾讯": ("00700", "腾讯控股", "HK"),
+    "腾讯控股": ("00700", "腾讯控股", "HK"),
+    "阿里巴巴": ("09988", "阿里巴巴-SW", "HK"),
+    "阿里": ("09988", "阿里巴巴-SW", "HK"),
+    "美团": ("03690", "美团-W", "HK"),
+    "京东": ("09618", "京东集团-SW", "HK"),
+    "小米": ("01810", "小米集团-W", "HK"),
+    # A股科技
+    "立讯精密": ("002475", "立讯精密", "SZ"),
+    "立讯": ("002475", "立讯精密", "SZ"),
+    "中芯国际": ("688981", "中芯国际", "SH"),
+    "中芯": ("688981", "中芯国际", "SH"),
+    "海康威视": ("002415", "海康威视", "SZ"),
+    "海康": ("002415", "海康威视", "SZ"),
+    "科大讯飞": ("002230", "科大讯飞", "SZ"),
+    "讯飞": ("002230", "科大讯飞", "SZ"),
+    # 石油/能源
+    "中国石油": ("601857", "中国石油", "SH"),
+    "中石油": ("601857", "中国石油", "SH"),
+    "中国石化": ("600028", "中国石化", "SH"),
+    "中石化": ("600028", "中国石化", "SH"),
+    "中国海油": ("600938", "中国海油", "SH"),
+    "海油": ("600938", "中国海油", "SH"),
+    "贵州燃气": ("600903", "贵州燃气", "SH"),
+    # 证券
+    "中信证券": ("600030", "中信证券", "SH"),
+    "中信": ("600030", "中信证券", "SH"),
+    "华泰证券": ("601688", "华泰证券", "SH"),
+    "华泰": ("601688", "华泰证券", "SH"),
+    "国泰君安": ("601211", "国泰君安", "SH"),
+    "东方财富": ("300059", "东方财富", "SZ"),
+    # 医药
+    "恒瑞医药": ("600276", "恒瑞医药", "SH"),
+    "恒瑞": ("600276", "恒瑞医药", "SH"),
+    "药明康德": ("603259", "药明康德", "SH"),
+    "药明": ("603259", "药明康德", "SH"),
+    "迈瑞医疗": ("300760", "迈瑞医疗", "SZ"),
+    "迈瑞": ("300760", "迈瑞医疗", "SZ"),
+    "片仔癀": ("600436", "片仔癀", "SH"),
+    # 消费
+    "海天味业": ("603288", "海天味业", "SH"),
+    "海天": ("603288", "海天味业", "SH"),
+    "伊利股份": ("600887", "伊利股份", "SH"),
+    "伊利": ("600887", "伊利股份", "SH"),
+    "蒙牛乳业": ("02319", "蒙牛乳业", "HK"),
+    "蒙牛": ("02319", "蒙牛乳业", "HK"),
+    "格力电器": ("000651", "格力电器", "SZ"),
+    "格力": ("000651", "格力电器", "SZ"),
+    "美的集团": ("000333", "美的集团", "SZ"),
+    "美的": ("000333", "美的集团", "SZ"),
+    # 通信/运营商
+    "中国移动": ("600941", "中国移动", "SH"),
+    "移动": ("600941", "中国移动", "SH"),
+    "中国电信": ("601728", "中国电信", "SH"),
+    "电信": ("601728", "中国电信", "SH"),
+    "中国联通": ("600050", "中国联通", "SH"),
+    "联通": ("600050", "中国联通", "SH"),
+    # 地产
+    "万科A": ("000002", "万科A", "SZ"),
+    "万科": ("000002", "万科A", "SZ"),
+    "保利发展": ("600048", "保利发展", "SH"),
+    "保利": ("600048", "保利发展", "SH"),
+    # 军工
+    "中航沈飞": ("600760", "中航沈飞", "SH"),
+    "沈飞": ("600760", "中航沈飞", "SH"),
+    "中国中免": ("601888", "中国中免", "SH"),
+    "中免": ("601888", "中国中免", "SH"),
+}
+
 
 @dataclass
 class StockRecord:
@@ -277,19 +396,81 @@ class StockMatcher:
         Returns:
             StockMatchResult
         """
-        if not self.ensure_collection_exists():
+        # 检查 Qdrant 集合是否存在
+        collection_exists = self.ensure_collection_exists()
+
+        if collection_exists:
+            # 优先使用 Qdrant RAG 匹配
+            # 先尝试精确匹配代码
+            exact_result = self._exact_match(query)
+            if exact_result:
+                return exact_result
+
+            # RAG 语义匹配
+            return self._semantic_match(query, top_k)
+        else:
+            # Qdrant 不可用，使用 Fallback 映射
+            return self._fallback_match(query)
+
+    def _fallback_match(self, query: str) -> StockMatchResult:
+        """
+        Fallback 匹配 (当 Qdrant 不可用时)
+
+        使用内置的常用股票映射表
+        """
+        clean_query = query.strip()
+
+        # 精确匹配 Fallback 表
+        if clean_query in COMMON_STOCKS_FALLBACK:
+            code, name, market = COMMON_STOCKS_FALLBACK[clean_query]
             return StockMatchResult(
-                success=False,
-                error_message="股票数据库未初始化，请联系管理员"
+                success=True,
+                stock_info=StockInfo(
+                    stock_code=code,
+                    stock_name=name,
+                    market=market
+                ),
+                confidence=1.0
             )
 
-        # 先尝试精确匹配代码
-        exact_result = self._exact_match(query)
-        if exact_result:
-            return exact_result
+        # 尝试模糊匹配 (包含关系)
+        for key, (code, name, market) in COMMON_STOCKS_FALLBACK.items():
+            if clean_query in key or key in clean_query:
+                return StockMatchResult(
+                    success=True,
+                    stock_info=StockInfo(
+                        stock_code=code,
+                        stock_name=name,
+                        market=market
+                    ),
+                    confidence=0.9
+                )
 
-        # RAG 语义匹配
-        return self._semantic_match(query, top_k)
+        # 尝试匹配股票代码
+        if clean_query.isdigit() and len(clean_query) == 6:
+            for key, (code, name, market) in COMMON_STOCKS_FALLBACK.items():
+                if code == clean_query:
+                    return StockMatchResult(
+                        success=True,
+                        stock_info=StockInfo(
+                            stock_code=code,
+                            stock_name=name,
+                            market=market
+                        ),
+                        confidence=1.0
+                    )
+
+        # 收集可能的建议
+        suggestions = []
+        for key, (code, name, market) in list(COMMON_STOCKS_FALLBACK.items())[:5]:
+            if name not in [s.split("(")[0] for s in suggestions]:
+                suggestions.append(f"{name}({code})")
+
+        return StockMatchResult(
+            success=False,
+            suggestions=suggestions[:3],
+            error_message=f"未能识别「{query}」，股票数据库正在初始化中。您可以尝试: {', '.join(suggestions[:3])}"
+        )
 
     def _exact_match(self, query: str) -> Optional[StockMatchResult]:
         """精确匹配股票代码"""

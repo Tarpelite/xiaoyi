@@ -208,7 +208,7 @@ class Message(BaseModel):
 
     # 模型信息
     model_used: Optional[str] = None      # prophet/xgboost/...
-    model_config: Optional[Dict[str, Any]] = None  # 模型参数
+    model_params: Optional[Dict[str, Any]] = None  # 模型参数
 
     # 步骤状态 (用于前端展示进度)
     step_details: List[StepDetail] = Field(default_factory=list)

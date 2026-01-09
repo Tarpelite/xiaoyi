@@ -234,7 +234,7 @@ class SessionManager:
         """保存模型信息"""
         updates = {"model_used": model_name}
         if config:
-            updates["model_config"] = config
+            updates["model_params"] = config
         self.update_message(message_id, **updates)
         print(f"🤖 Model info saved: {model_name}")
 

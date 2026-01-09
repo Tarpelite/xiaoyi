@@ -337,7 +337,7 @@ class UnifiedTaskProcessorV3:
     async def _fetch_stock_data(self, stock_code: str, start_date: str, end_date: str):
         """获取股票历史数据"""
         data_config = {
-            "data_type": "stock_zh_a_hist",
+            "api_function": "stock_zh_a_hist",
             "params": {
                 "symbol": stock_code,
                 "start_date": start_date,
