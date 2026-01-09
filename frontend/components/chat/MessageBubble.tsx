@@ -208,8 +208,8 @@ export function MessageBubble({ message }: MessageBubbleProps) {
               <IntentBadge intentInfo={message.intentInfo} />
             )}
 
-            {/* 步骤进度 - 横向链式显示 */}
-            {message.steps && message.steps.length > 0 && (
+            {/* 步骤进度 - 只在 forecast 模式下显示 */}
+            {message.renderMode === 'forecast' && message.steps && message.steps.length > 0 && (
               <div className="glass rounded-2xl px-6 py-4">
                 <StepProgress steps={message.steps} />
               </div>
@@ -238,8 +238,8 @@ export function MessageBubble({ message }: MessageBubbleProps) {
                 )
               }
 
-              // 如果有步骤进度条，或者有结构化内容，显示四个结构化部分
-              const hasSteps = message.steps && message.steps.length > 0
+              // 只有 forecast 模式才考虑步骤进度条
+              const hasSteps = renderMode === 'forecast' && message.steps && message.steps.length > 0
 
               if (hasContents || displayText || hasSteps) {
                 // 分类内容：图表、表格、文本

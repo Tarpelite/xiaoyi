@@ -2,13 +2,11 @@
 
 import { useState, useEffect, useRef } from 'react'
 import Image from 'next/image'
-import { Download, Share2, MoreVertical, Paperclip, Send, Zap, Settings2, ChevronDown, ChevronRight } from 'lucide-react'
+import { Download, Share2, MoreVertical, Paperclip, Send, Zap, ChevronDown, ChevronRight } from 'lucide-react'
 import { MessageBubble } from './MessageBubble'
 import { QuickSuggestions } from './QuickSuggestions'
 import { AnalysisCards } from './AnalysisCards'
 import { cn } from '@/lib/utils'
-import type { ToolSettings } from '@/lib/api/chat'
-import { DEFAULT_TOOL_SETTINGS } from '@/lib/api/chat'
 
 // 步骤状态
 export type StepStatus = 'pending' | 'running' | 'completed' | 'failed'
@@ -140,11 +138,8 @@ export function ChatArea() {
   const [messages, setMessages] = useState<Message[]>([])
   const [inputValue, setInputValue] = useState('')
   const [isLoading, setIsLoading] = useState(false)
-  const [selectedModel, setSelectedModel] = useState<'prophet' | 'xgboost' | 'randomforest' | 'dlinear'>('prophet')
   const [sessionId, setSessionId] = useState<string>(() => getOrCreateSessionId())
   const [quickSuggestions, setQuickSuggestions] = useState<string[]>(defaultQuickSuggestions)
-  const [tools, setTools] = useState<ToolSettings>(DEFAULT_TOOL_SETTINGS)
-  const [isSettingsExpanded, setIsSettingsExpanded] = useState(false)
 
   // 对话模式动画状态 (针对最后一条消息)
   const [lastMessageConversationalMode, setLastMessageConversationalMode] = useState(false)
