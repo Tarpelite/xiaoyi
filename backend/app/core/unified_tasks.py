@@ -35,10 +35,17 @@ from app.services.stock_matcher import get_stock_matcher
 from app.services.news_rag_service import create_news_rag_service
 
 # Agents
-from app.agents import IntentAgent, RAGAgent, FinanceChatAgent
+from app.agents import (
+    IntentAgent,
+    RAGAgent,
+    ReportAgent,
+    ErrorExplainerAgent,
+    SentimentAgent,
+)
 
 # Data & Models
 from app.data import DataFetcher
+from app.data.fetcher import DataFetchError
 from app.models import (
     TimeSeriesAnalyzer,
     ProphetForecaster,
@@ -46,9 +53,6 @@ from app.models import (
     RandomForestForecaster,
     DLinearForecaster
 )
-
-# Sentiment
-from app.sentiment import SentimentAnalyzer
 
 
 class UnifiedTaskProcessorV3:
@@ -67,8 +71,9 @@ class UnifiedTaskProcessorV3:
         self.api_key = api_key
         self.intent_agent = IntentAgent(api_key)
         self.rag_agent = RAGAgent(api_key)
-        self.finance_agent = FinanceChatAgent(api_key)
-        self.sentiment_analyzer = SentimentAnalyzer(api_key)
+        self.report_agent = ReportAgent(api_key)
+        self.error_explainer = ErrorExplainerAgent(api_key)
+        self.sentiment_agent = SentimentAgent(api_key)
         self.stock_matcher = get_stock_matcher()
 
     async def execute(
@@ -244,7 +249,25 @@ class UnifiedTaskProcessorV3:
             return_exceptions=True
         )
 
-        df = results[0] if not isinstance(results[0], Exception) else None
+        # 处理股票数据获取结果
+        df = None
+        if isinstance(results[0], DataFetchError):
+            # 使用 ErrorExplainerAgent 生成友好的错误解释
+            error_explanation = await asyncio.to_thread(
+                self.error_explainer.explain_data_fetch_error,
+                results[0],
+                user_input
+            )
+            session.save_conclusion(error_explanation)
+            session.update_step_detail(3, "error", "数据获取失败")
+            return
+        elif isinstance(results[0], Exception):
+            session.save_conclusion(f"获取数据时发生错误: {str(results[0])}")
+            session.update_step_detail(3, "error", "数据获取失败")
+            return
+        else:
+            df = results[0]
+
         news_result = results[1] if not isinstance(results[1], Exception) else ([], {})
         rag_sources = results[2] if not isinstance(results[2], Exception) and intent.enable_rag else []
 
@@ -298,7 +321,7 @@ class UnifiedTaskProcessorV3:
 
         # 获取推荐参数
         prophet_params = await asyncio.to_thread(
-            self.sentiment_analyzer.recommend_params,
+            self.sentiment_agent.recommend_params,
             sentiment_result or {},
             features
         )
@@ -323,7 +346,7 @@ class UnifiedTaskProcessorV3:
         session.update_step_detail(6, "running", "生成分析报告...")
 
         report = await asyncio.to_thread(
-            self.finance_agent.reporter.generate,
+            self.report_agent.generate,
             user_input,
             features,
             forecast_result,
@@ -335,7 +358,7 @@ class UnifiedTaskProcessorV3:
         session.update_step_detail(6, "completed", "报告生成完成")
 
     async def _fetch_stock_data(self, stock_code: str, start_date: str, end_date: str):
-        """获取股票历史数据"""
+        """获取股票历史数据，遇到错误时抛出 DataFetchError"""
         data_config = {
             "api_function": "stock_zh_a_hist",
             "params": {
@@ -346,13 +369,9 @@ class UnifiedTaskProcessorV3:
             }
         }
 
-        try:
-            raw_df = await asyncio.to_thread(DataFetcher.fetch, data_config)
-            df = await asyncio.to_thread(DataFetcher.prepare, raw_df, data_config)
-            return df
-        except Exception as e:
-            print(f"[Forecast] 获取股票数据失败: {e}")
-            return None
+        raw_df = await asyncio.to_thread(DataFetcher.fetch, data_config)
+        df = await asyncio.to_thread(DataFetcher.prepare, raw_df, data_config)
+        return df
 
     async def _fetch_news_combined(
         self,
@@ -378,7 +397,7 @@ class UnifiedTaskProcessorV3:
 
         # Tavily 新闻
         try:
-            from app.news import TavilyNewsClient
+            from app.data import TavilyNewsClient
             tavily_client = TavilyNewsClient(settings.tavily_api_key)
             search_query = " ".join(keywords.search_keywords[:3]) if keywords.search_keywords else stock_name
             tavily_results = await asyncio.to_thread(
@@ -457,13 +476,13 @@ class UnifiedTaskProcessorV3:
 
             if tavily_results.get("count", 0) > 0:
                 result = await asyncio.to_thread(
-                    self.sentiment_analyzer.analyze_with_links,
+                    self.sentiment_agent.analyze_with_links,
                     news_df,
                     tavily_results
                 )
             elif news_df is not None and not news_df.empty:
                 result = await asyncio.to_thread(
-                    self.sentiment_analyzer.analyze,
+                    self.sentiment_agent.analyze,
                     news_df
                 )
             else:
@@ -617,7 +636,7 @@ class UnifiedTaskProcessorV3:
             return []
 
         try:
-            from app.news import TavilyNewsClient
+            from app.data import TavilyNewsClient
             tavily_client = TavilyNewsClient(settings.tavily_api_key)
             query = " ".join(keywords[:3])
             result = await asyncio.to_thread(

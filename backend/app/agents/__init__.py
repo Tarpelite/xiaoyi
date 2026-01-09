@@ -2,14 +2,14 @@
 Agents Module
 =============
 
-AI Agent 层，负责业务逻辑编排
+AI Agent 层，负责业务逻辑编排 (所有使用 LLM 的模块)
 """
 
-from .nlp_agent import NLPAgent
 from .report_agent import ReportAgent
-from .finance_agent import FinanceChatAgent
 from .intent_agent import IntentAgent
 from .suggestion_agent import SuggestionAgent
+from .error_explainer import ErrorExplainerAgent
+from .sentiment_agent import SentimentAgent
 
 # RAG Agent 可选导入（依赖 Qdrant 和 FlagEmbedding）
 try:
@@ -20,4 +20,12 @@ except ImportError as e:
     RAG_AVAILABLE = False
     print(f"[Warning] RAG Agent 不可用: {e}")
 
-__all__ = ["NLPAgent", "ReportAgent", "FinanceChatAgent", "IntentAgent", "SuggestionAgent", "RAGAgent", "RAG_AVAILABLE"]
+__all__ = [
+    "ReportAgent",
+    "IntentAgent",
+    "SuggestionAgent",
+    "ErrorExplainerAgent",
+    "SentimentAgent",
+    "RAGAgent",
+    "RAG_AVAILABLE",
+]

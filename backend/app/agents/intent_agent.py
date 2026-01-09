@@ -11,7 +11,7 @@
 - 预测参数: forecast_model, history_days, forecast_horizon
 """
 
-from typing import Dict, Any, List, Optional, Generator
+from typing import Dict, List, Optional, Generator
 import json
 from openai import OpenAI
 
@@ -400,87 +400,3 @@ class IntentAgent:
         )
 
         return response.choices[0].message.content
-
-    # ========== 兼容旧版方法 ==========
-
-    def judge_intent(
-        self,
-        user_query: str,
-        conversation_history: Optional[List[Dict[str, str]]] = None
-    ) -> Dict[str, Any]:
-        """
-        判断用户意图 (兼容旧版 API)
-
-        Returns:
-            包含 intent, reason, tools, model, params 的字典
-        """
-        unified = self.recognize_intent(user_query, conversation_history)
-
-        # 转换为旧版格式
-        if not unified.is_in_scope:
-            intent = "out_of_scope"
-        elif unified.is_forecast:
-            intent = "analyze"
-        else:
-            intent = "answer"
-
-        return {
-            "intent": intent,
-            "reason": unified.reason,
-            "tools": {
-                "forecast": unified.is_forecast,
-                "report_rag": unified.enable_rag,
-                "news_rag": unified.enable_search or unified.enable_domain_info
-            },
-            "model": unified.forecast_model,
-            "params": {
-                "history_days": unified.history_days,
-                "forecast_horizon": unified.forecast_horizon
-            },
-            # 新增字段
-            "unified_intent": unified.model_dump()
-        }
-
-    def answer_question(
-        self,
-        user_query: str,
-        conversation_history: Optional[List[Dict[str, str]]] = None
-    ) -> str:
-        """基于对话历史回答问题 (兼容旧版)"""
-        return self.generate_chat_response(user_query, conversation_history)
-
-    def answer_question_stream(
-        self,
-        user_query: str,
-        conversation_history: Optional[List[Dict[str, str]]] = None
-    ) -> Generator[str, None, None]:
-        """流式回答问题 (兼容旧版)"""
-        return self.generate_chat_response(user_query, conversation_history, stream=True)
-
-    def summarize_news_stream(
-        self,
-        user_query: str,
-        news_context: str,
-        conversation_history: Optional[List[Dict[str, str]]] = None
-    ) -> Generator[str, None, None]:
-        """流式总结新闻 (兼容旧版)"""
-        return self.generate_chat_response(
-            user_query,
-            conversation_history,
-            context=f"搜索到的新闻:\n{news_context}",
-            stream=True
-        )
-
-    def extract_search_keywords(self, user_query: str) -> Dict[str, Any]:
-        """
-        提取搜索关键词 (兼容旧版)
-        """
-        # 使用统一意图识别
-        intent = self.recognize_intent(user_query)
-
-        return {
-            "keywords": " ".join(intent.raw_search_keywords) if intent.raw_search_keywords else user_query,
-            "is_stock": bool(intent.stock_mention),
-            "stock_name": intent.stock_mention or "",
-            "stock_code": ""  # 代码需要通过股票匹配服务获取
-        }

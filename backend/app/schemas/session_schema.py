@@ -246,9 +246,3 @@ class NewsSummaryResult(BaseModel):
     news_items: List[SummarizedNewsItem]
     total_before_dedup: int
     total_after_dedup: int
-
-
-class EmotionAnalysis(BaseModel):
-    """情绪分析结果"""
-    score: float  # -1 到 1
-    description: str
