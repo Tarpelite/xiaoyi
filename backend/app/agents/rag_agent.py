@@ -3,12 +3,14 @@ RAG Agent 模块
 ==============
 
 基于研报知识库的检索增强生成 Agent
+
+使用外部 RAG 服务 (http://10.139.197.44:8000)
 """
 
 from typing import Dict, Any, List, Optional, Generator
 from openai import OpenAI
 
-from app.rag import RAGService, get_rag_service
+from app.services.rag_client import get_rag_client, RAGClient
 
 
 class RAGAgent:
@@ -25,7 +27,7 @@ class RAGAgent:
             api_key=api_key,
             base_url="https://api.deepseek.com"
         )
-        self.rag_service = get_rag_service()
+        self.rag_client: RAGClient = get_rag_client()
 
     def search_reports(
         self,
@@ -33,7 +35,7 @@ class RAGAgent:
         top_k: int = 5
     ) -> List[Dict[str, Any]]:
         """
-        搜索相关研报内容
+        搜索相关研报内容 (使用外部 RAG 服务)
 
         Args:
             query: 用户查询
@@ -42,16 +44,24 @@ class RAGAgent:
         Returns:
             检索结果列表，包含内容、来源、页码等
         """
-        results = self.rag_service.search(query, top_k=top_k, use_hybrid=True)
+        # 调用外部 RAG 服务 (同步版本)
+        response = self.rag_client.search_sync(
+            query=query,
+            top_k=top_k,
+            mode="hybrid",
+            use_rerank=True
+        )
 
         formatted_results = []
-        for r in results:
+        for r in response.results:
             formatted_results.append({
                 "content": r.content,
                 "file_name": r.file_name,
                 "page_number": r.page_number,
                 "score": r.score,
-                "doc_id": r.doc_id
+                "doc_id": r.doc_id,
+                "title": r.title,
+                "section_title": r.section_title
             })
 
         return formatted_results

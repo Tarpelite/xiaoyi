@@ -113,6 +113,7 @@ class UnifiedIntent(BaseModel):
 
     # 股票相关
     stock_mention: Optional[str] = Field(default=None, description="用户提到的股票名称/代码")
+    stock_full_name: Optional[str] = Field(default=None, description="LLM 生成的股票官方全称 (如 '中石油' -> '中国石油')")
 
     # 初步关键词 (LLM 提取，股票匹配后会被优化)
     raw_search_keywords: List[str] = Field(default_factory=list)
@@ -149,43 +150,41 @@ class StockMatchResult(BaseModel):
 
 # ========== 核心数据模型 ==========
 
-class SessionData(BaseModel):
+class MessageData(BaseModel):
     """
-    会话数据 (用于 Redis 存储和 API 响应)
+    单轮 QA 数据 (Message)
 
-    统一的数据结构，支持预测和非预测两种流程
+    每轮对话的完整分析结果，独立存储于 Redis
     """
     # 基础信息
+    message_id: str
     session_id: str
     created_at: str
     updated_at: str
-    status: SessionStatus = SessionStatus.PENDING
 
     # 用户输入
     user_query: str = ""
-    context: str = ""
 
-    # 意图识别
-    intent: str = "pending"  # forecast/rag/news/chat/out_of_scope
-    unified_intent: Optional[UnifiedIntent] = None
-
-    # 股票匹配
-    stock_match: Optional[StockMatchResult] = None
-    stock_code: Optional[str] = None
-
-    # 关键词
-    resolved_keywords: Optional[ResolvedKeywords] = None
-
-    # 步骤进度
+    # 状态
+    status: SessionStatus = SessionStatus.PENDING
     steps: int = 0
     total_steps: int = 0
     step_details: List[StepDetail] = Field(default_factory=list)
 
-    # === 预测流程数据 ===
+    # 意图识别
+    intent: str = "pending"  # forecast/rag/news/chat/out_of_scope
+    unified_intent: Optional[UnifiedIntent] = None
     is_forecast: bool = False
+
+    # 股票匹配
+    stock_match: Optional[StockMatchResult] = None
+    stock_code: Optional[str] = None
+    resolved_keywords: Optional[ResolvedKeywords] = None
+
+    # 模型配置
     model_name: str = "prophet"
 
-    # 时序数据
+    # 时序数据 (仅预测)
     time_series_original: List[TimeSeriesPoint] = Field(default_factory=list)
     time_series_full: List[TimeSeriesPoint] = Field(default_factory=list)
     prediction_done: bool = False
@@ -200,11 +199,31 @@ class SessionData(BaseModel):
     emotion: Optional[float] = None  # -1 到 1
     emotion_des: Optional[str] = None
 
-    # === 通用数据 ===
+    # 结论
     conclusion: str = ""
     error_message: Optional[str] = None
 
-    # 对话历史
+
+class SessionData(BaseModel):
+    """
+    会话数据 (Session) - 多轮对话容器
+
+    存储全局信息和消息列表，每个消息的详细数据在 MessageData 中
+    """
+    # 基础信息
+    session_id: str
+    created_at: str
+    updated_at: str
+
+    # 全局配置
+    context: str = ""
+    model_name: str = "prophet"
+
+    # 消息管理
+    message_ids: List[str] = Field(default_factory=list)
+    current_message_id: Optional[str] = None
+
+    # 对话历史 (文本形式，用于 LLM 上下文)
     conversation_history: List[Dict[str, str]] = Field(default_factory=list)
 
 
@@ -222,10 +241,11 @@ class CreateAnalysisRequest(BaseModel):
 class AnalysisStatusResponse(BaseModel):
     """分析状态响应"""
     session_id: str
+    message_id: str
     status: SessionStatus
     steps: int
     total_steps: int = 0
-    data: SessionData
+    data: MessageData
 
 
 # ========== 新闻相关模型 ==========
