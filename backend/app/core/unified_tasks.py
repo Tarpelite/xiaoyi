@@ -7,14 +7,18 @@
 2. 股票 RAG 匹配 (当 stock_mention 非空时)
 3. 并行数据获取
 4. 新闻 RAG 服务 (语义去重)
-5. 新版 Session 管理
+5. Session/Message 分离管理
+
+架构:
+- Session: 存储对话历史，用于 LLM 上下文
+- Message: 存储单轮分析结果，用于前端展示
 """
 
 import asyncio
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 
-from app.core.session import Session
+from app.core.session import Session, Message
 from app.core.config import settings
 from app.schemas.session_schema import (
     SessionStatus,
@@ -32,7 +36,8 @@ from app.schemas.session_schema import (
 
 # Services
 from app.services.stock_matcher import get_stock_matcher
-from app.services.news_rag_service import create_news_rag_service
+# NewsRAGService 暂时不使用，直接用 LLM 批量总结
+# from app.services.news_rag_service import create_news_rag_service
 
 # Agents
 from app.agents import (
@@ -79,6 +84,7 @@ class UnifiedTaskProcessorV3:
     async def execute(
         self,
         session_id: str,
+        message_id: str,
         user_input: str,
         model_name: str = "prophet",
         force_intent: Optional[str] = None
@@ -88,19 +94,21 @@ class UnifiedTaskProcessorV3:
 
         Args:
             session_id: 会话 ID
+            message_id: 消息 ID (存储分析结果)
             user_input: 用户输入
             model_name: 预测模型名称
             force_intent: 强制指定意图类型
         """
-        # 使用兼容模式 (旧版 Session)
+        # Session 用于对话历史，Message 用于存储分析结果
         session = Session(session_id)
+        message = Message(message_id, session_id)
 
         try:
             # 获取对话历史
             conversation_history = session.get_conversation_history()
 
             # === 阶段 1: 意图识别 ===
-            session.update_step_detail(1, "running", "分析用户意图...")
+            message.update_step_detail(1, "running", "分析用户意图...")
 
             if force_intent:
                 intent = self._create_forced_intent(force_intent, model_name)
@@ -112,37 +120,39 @@ class UnifiedTaskProcessorV3:
                 )
 
             # 保存意图
-            session.save_unified_intent(intent)
+            message.save_unified_intent(intent)
 
             # 检查是否超出范围
             if not intent.is_in_scope:
-                session.save_conclusion(intent.out_of_scope_reply or "抱歉，我是金融时序分析助手，暂不支持此类问题。")
-                session.update_step_detail(1, "completed", "超出服务范围")
-                session.mark_completed()
+                message.save_conclusion(intent.out_of_scope_reply or "抱歉，我是金融时序分析助手，暂不支持此类问题。")
+                message.update_step_detail(1, "completed", "超出服务范围")
+                message.mark_completed()
                 return
 
-            session.update_step_detail(1, "completed", f"意图: {'预测' if intent.is_forecast else '对话'}")
+            message.update_step_detail(1, "completed", f"意图: {'预测' if intent.is_forecast else '对话'}")
 
             # === 阶段 2: 股票验证 (当 stock_mention 非空时) ===
             stock_match_result = None
             resolved_keywords = None
 
             if intent.stock_mention:
-                session.update_step_detail(2, "running", f"验证股票: {intent.stock_mention}")
+                # 使用 LLM 生成的官方全称进行 RAG 查询，若无则使用原始输入
+                query_name = intent.stock_full_name or intent.stock_mention
+                message.update_step_detail(2, "running", f"验证股票: {query_name}")
 
                 stock_match_result = await asyncio.to_thread(
                     self.stock_matcher.match,
-                    intent.stock_mention
+                    query_name
                 )
 
-                session.save_stock_match(stock_match_result)
+                message.save_stock_match(stock_match_result)
 
                 if not stock_match_result.success:
                     # 股票验证失败，终止流程
                     error_msg = stock_match_result.error_message or "股票验证失败"
-                    session.save_conclusion(error_msg)
-                    session.update_step_detail(2, "error", error_msg)
-                    session.mark_completed()
+                    message.save_conclusion(error_msg)
+                    message.update_step_detail(2, "error", error_msg)
+                    message.mark_completed()
                     return
 
                 # 解析最终关键词
@@ -152,9 +162,9 @@ class UnifiedTaskProcessorV3:
                     stock_name=stock_info.stock_name if stock_info else None,
                     stock_code=stock_info.stock_code if stock_info else None
                 )
-                session.save_resolved_keywords(resolved_keywords)
+                message.save_resolved_keywords(resolved_keywords)
 
-                session.update_step_detail(
+                message.update_step_detail(
                     2, "completed",
                     f"匹配: {stock_info.stock_name}({stock_info.stock_code})" if stock_info else "无匹配"
                 )
@@ -169,28 +179,27 @@ class UnifiedTaskProcessorV3:
             # === 阶段 3+: 根据意图执行 ===
             if intent.is_forecast:
                 await self._execute_forecast_v3(
-                    session, user_input, intent, stock_match_result,
+                    message, session, user_input, intent, stock_match_result,
                     resolved_keywords, conversation_history
                 )
             else:
                 await self._execute_chat_v3(
-                    session, user_input, intent, stock_match_result,
+                    message, session, user_input, intent, stock_match_result,
                     resolved_keywords, conversation_history
                 )
 
             # 标记完成
-            session.mark_completed()
+            message.mark_completed()
 
             # 添加助手回复到对话历史
-            data = session.get()
+            data = message.get()
             if data and data.conclusion:
-                session.add_conversation_message("user", user_input)
                 session.add_conversation_message("assistant", data.conclusion)
 
         except Exception as e:
             import traceback
             print(f"❌ Task execution error: {traceback.format_exc()}")
-            session.mark_error(str(e))
+            message.mark_error(str(e))
             raise
 
     def _create_forced_intent(self, force_type: str, model_name: str) -> UnifiedIntent:
@@ -205,10 +214,104 @@ class UnifiedTaskProcessorV3:
             reason="用户强制指定"
         )
 
+    async def execute_after_intent(
+        self,
+        session_id: str,
+        message_id: str,
+        user_input: str,
+        intent: UnifiedIntent
+    ):
+        """
+        在意图识别完成后继续执行分析
+
+        用于流式接口：意图识别通过 SSE 流式返回后，
+        剩余步骤（股票验证、数据获取、预测等）通过此方法在后台执行
+
+        Args:
+            session_id: 会话 ID
+            message_id: 消息 ID
+            user_input: 用户输入
+            intent: 已识别的意图（包含 forecast_model 等参数）
+        """
+        session = Session(session_id)
+        message = Message(message_id, session_id)
+
+        try:
+            conversation_history = session.get_conversation_history()
+
+            # === 阶段 2: 股票验证 (当 stock_mention 非空时) ===
+            stock_match_result = None
+            resolved_keywords = None
+
+            if intent.stock_mention:
+                # 使用 LLM 生成的官方全称进行 RAG 查询，若无则使用原始输入
+                query_name = intent.stock_full_name or intent.stock_mention
+                message.update_step_detail(2, "running", f"验证股票: {query_name}")
+
+                stock_match_result = await asyncio.to_thread(
+                    self.stock_matcher.match,
+                    query_name
+                )
+
+                message.save_stock_match(stock_match_result)
+
+                if not stock_match_result.success:
+                    error_msg = stock_match_result.error_message or "股票验证失败"
+                    message.save_conclusion(error_msg)
+                    message.update_step_detail(2, "error", error_msg)
+                    message.mark_completed()
+                    return
+
+                stock_info = stock_match_result.stock_info
+                resolved_keywords = self.intent_agent.resolve_keywords(
+                    intent,
+                    stock_name=stock_info.stock_name if stock_info else None,
+                    stock_code=stock_info.stock_code if stock_info else None
+                )
+                message.save_resolved_keywords(resolved_keywords)
+
+                message.update_step_detail(
+                    2, "completed",
+                    f"匹配: {stock_info.stock_name}({stock_info.stock_code})" if stock_info else "无匹配"
+                )
+            else:
+                resolved_keywords = ResolvedKeywords(
+                    search_keywords=intent.raw_search_keywords,
+                    rag_keywords=intent.raw_rag_keywords,
+                    domain_keywords=intent.raw_domain_keywords
+                )
+
+            # === 阶段 3+: 根据意图执行 ===
+            if intent.is_forecast:
+                await self._execute_forecast_v3(
+                    message, session, user_input, intent, stock_match_result,
+                    resolved_keywords, conversation_history
+                )
+            else:
+                await self._execute_chat_v3(
+                    message, session, user_input, intent, stock_match_result,
+                    resolved_keywords, conversation_history
+                )
+
+            # 标记完成
+            message.mark_completed()
+
+            # 添加助手回复到对话历史
+            data = message.get()
+            if data and data.conclusion:
+                session.add_conversation_message("assistant", data.conclusion)
+
+        except Exception as e:
+            import traceback
+            print(f"❌ execute_after_intent error: {traceback.format_exc()}")
+            message.mark_error(str(e))
+            raise
+
     # ========== 预测流程 ==========
 
     async def _execute_forecast_v3(
         self,
+        message: Message,
         session: Session,
         user_input: str,
         intent: UnifiedIntent,
@@ -231,7 +334,7 @@ class UnifiedTaskProcessorV3:
         stock_name = stock_info.stock_name if stock_info else user_input
 
         # === 阶段 2: 数据获取 (并行) ===
-        session.update_step_detail(3, "running", "获取历史数据和新闻...")
+        message.update_step_detail(3, "running", "获取历史数据和新闻...")
 
         # 设置日期范围
         end_date = datetime.now().strftime("%Y%m%d")
@@ -258,12 +361,12 @@ class UnifiedTaskProcessorV3:
                 results[0],
                 user_input
             )
-            session.save_conclusion(error_explanation)
-            session.update_step_detail(3, "error", "数据获取失败")
+            message.save_conclusion(error_explanation)
+            message.update_step_detail(3, "error", "数据获取失败")
             return
         elif isinstance(results[0], Exception):
-            session.save_conclusion(f"获取数据时发生错误: {str(results[0])}")
-            session.update_step_detail(3, "error", "数据获取失败")
+            message.save_conclusion(f"获取数据时发生错误: {str(results[0])}")
+            message.update_step_detail(3, "error", "数据获取失败")
             return
         else:
             df = results[0]
@@ -272,13 +375,13 @@ class UnifiedTaskProcessorV3:
         rag_sources = results[2] if not isinstance(results[2], Exception) and intent.enable_rag else []
 
         if df is None or df.empty:
-            session.save_conclusion(f"无法获取 {stock_name} 的历史数据，请检查股票代码是否正确。")
-            session.update_step_detail(3, "error", "数据获取失败")
+            message.save_conclusion(f"无法获取 {stock_name} 的历史数据，请检查股票代码是否正确。")
+            message.update_step_detail(3, "error", "数据获取失败")
             return
 
         # 保存数据
         original_points = self._df_to_points(df, is_prediction=False)
-        session.save_time_series_original(original_points)
+        message.save_time_series_original(original_points)
 
         news_items, sentiment_result = news_result
         # 使用 LLM 总结新闻标题
@@ -286,15 +389,15 @@ class UnifiedTaskProcessorV3:
             summarized_news = await self._summarize_news_items(session.session_id, news_items)
         else:
             summarized_news = []
-        session.save_news(summarized_news)
+        message.save_news(summarized_news)
 
         if rag_sources:
-            session.save_rag_sources(rag_sources)
+            message.save_rag_sources(rag_sources)
 
-        session.update_step_detail(3, "completed", f"历史数据 {len(df)} 天, 新闻 {len(news_items)} 条")
+        message.update_step_detail(3, "completed", f"历史数据 {len(df)} 天, 新闻 {len(news_items)} 条")
 
         # === 阶段 3: 分析处理 (并行) ===
-        session.update_step_detail(4, "running", "分析时序特征和市场情绪...")
+        message.update_step_detail(4, "running", "分析时序特征和市场情绪...")
 
         # 并行分析
         features_task = asyncio.to_thread(TimeSeriesAnalyzer.analyze_features, df)
@@ -311,18 +414,18 @@ class UnifiedTaskProcessorV3:
 
         # 保存情绪
         if emotion_result:
-            session.save_emotion(
+            message.save_emotion(
                 emotion_result.get("score", 0),
                 emotion_result.get("description", "中性")
             )
 
-        session.update_step_detail(
+        message.update_step_detail(
             4, "completed",
             f"趋势: {features.get('trend', 'N/A')}, 情绪: {emotion_result.get('description', 'N/A')}"
         )
 
         # === 阶段 4: 模型预测 ===
-        session.update_step_detail(5, "running", f"训练 {intent.forecast_model.upper()} 模型...")
+        message.update_step_detail(5, "running", f"训练 {intent.forecast_model.upper()} 模型...")
 
         # 获取推荐参数
         prophet_params = await asyncio.to_thread(
@@ -342,25 +445,25 @@ class UnifiedTaskProcessorV3:
         # 保存预测结果
         full_points = original_points + self._forecast_to_points(forecast_result["forecast"])
         prediction_start = forecast_result["forecast"][0]["date"] if forecast_result["forecast"] else ""
-        session.save_time_series_full(full_points, prediction_start)
+        message.save_time_series_full(full_points, prediction_start)
 
         metrics_info = ", ".join([f"{k.upper()}: {v}" for k, v in forecast_result.get('metrics', {}).items()])
-        session.update_step_detail(5, "completed", f"预测完成 ({metrics_info})")
+        message.update_step_detail(5, "completed", f"预测完成 ({metrics_info})")
 
         # === 阶段 5: 报告生成 ===
-        session.update_step_detail(6, "running", "生成分析报告...")
+        message.update_step_detail(6, "running", "生成分析报告...")
 
         report = await asyncio.to_thread(
             self.report_agent.generate,
             user_input,
             features,
             forecast_result,
-            sentiment_result or {},
+            emotion_result or {},  # 使用分析后的情绪结果，包含 score 和 description
             conversation_history
         )
-        session.save_conclusion(report)
+        message.save_conclusion(report)
 
-        session.update_step_detail(6, "completed", "报告生成完成")
+        message.update_step_detail(6, "completed", "报告生成完成")
 
     async def _fetch_stock_data(self, stock_code: str, start_date: str, end_date: str):
         """获取股票历史数据，遇到错误时抛出 DataFetchError"""
@@ -387,20 +490,22 @@ class UnifiedTaskProcessorV3:
         """
         获取合并新闻 (AkShare + Tavily)
 
+        简化版：各取前5条，共10条新闻
+
         Returns:
             (news_items, sentiment_data)
         """
         news_items = []
         tavily_results = {"results": [], "count": 0}
+        news_df = None
 
-        # AkShare 新闻
+        # AkShare 新闻 (取前5条)
         try:
-            news_df = await asyncio.to_thread(DataFetcher.fetch_news, stock_code, 50)
+            news_df = await asyncio.to_thread(DataFetcher.fetch_news, stock_code, 20)
         except Exception as e:
             print(f"[News] AkShare 获取失败: {e}")
-            news_df = None
 
-        # Tavily 新闻
+        # Tavily 新闻 (取前5条)
         try:
             from app.data import TavilyNewsClient
             tavily_client = TavilyNewsClient(settings.tavily_api_key)
@@ -409,31 +514,33 @@ class UnifiedTaskProcessorV3:
                 tavily_client.search_stock_news,
                 stock_name=search_query,
                 days=30,
-                max_results=10
+                max_results=5  # 只取5条
             )
         except Exception as e:
             print(f"[News] Tavily 获取失败: {e}")
 
-        # 转换 AkShare 新闻
+        # 转换 AkShare 新闻 (前5条)
         if news_df is not None and not news_df.empty:
-            for _, row in news_df.head(10).iterrows():
+            for _, row in news_df.head(5).iterrows():  # 只取5条
                 news_items.append(NewsItem(
                     title=row.get("新闻标题", ""),
                     content=row.get("新闻内容", "")[:300] if row.get("新闻内容") else "",
-                    url="",
+                    url=str(row.get("新闻链接", "")),
                     published_date=str(row.get("发布时间", "")),
                     source_type="domain_info"
                 ))
 
-        # 转换 Tavily 新闻
-        for item in tavily_results.get("results", []):
+        # 转换 Tavily 新闻 (前5条)
+        for item in tavily_results.get("results", [])[:5]:  # 只取5条
             news_items.append(NewsItem(
                 title=item.get("title", ""),
                 content=item.get("content", "")[:300],
                 url=item.get("url", ""),
-                published_date=item.get("published_date", ""),
+                published_date=item.get("published_date") or "-",  # Tavily 通常不返回日期
                 source_type="search"
             ))
+
+        print(f"[News] 获取新闻: AkShare {min(5, len(news_df) if news_df is not None else 0)} 条, Tavily {len(tavily_results.get('results', [])[:5])} 条")
 
         # 构建情感分析数据
         sentiment_data = {
@@ -472,15 +579,20 @@ class UnifiedTaskProcessorV3:
 
     async def _summarize_news_items(
         self,
-        session_id: str,
+        _session_id: str,  # 暂时不使用，保留接口兼容
         news_items: List[NewsItem]
     ) -> List[SummarizedNewsItem]:
-        """使用 LLM 总结新闻标题"""
+        """
+        使用 LLM 批量总结新闻标题
+
+        简化版：不使用 NewsRAGService，直接用一次 LLM 调用批量总结
+        """
         if not news_items:
             return []
 
         try:
             from openai import AsyncOpenAI
+            import json
 
             # 创建 LLM 客户端 (使用 DeepSeek)
             llm_client = AsyncOpenAI(
@@ -488,11 +600,75 @@ class UnifiedTaskProcessorV3:
                 base_url="https://api.deepseek.com"
             )
 
-            # 创建 NewsRAGService 并总结新闻
-            news_rag = create_news_rag_service(session_id)
-            result = await news_rag.summarize_news(news_items, llm_client)
+            # 构建批量总结 prompt
+            news_text = ""
+            for i, item in enumerate(news_items, 1):
+                content_preview = item.content[:200] if item.content else ""
+                news_text += f"{i}. 标题: {item.title}\n   内容: {content_preview}\n\n"
 
-            return result.news_items
+            prompt = f"""你是一个金融新闻编辑。请对以下 {len(news_items)} 条新闻进行总结：
+
+{news_text}
+
+要求:
+1. 为每条新闻生成一个简洁的摘要标题 (不超过25字)
+2. 为每条新闻生成一个简短的内容摘要 (不超过60字)
+3. 保持客观中立，去除标题党成分
+4. 突出与股票/金融相关的关键信息
+
+请严格按照以下 JSON 数组格式输出，不要输出任何其他内容:
+[
+  {{"index": 1, "summarized_title": "...", "summarized_content": "..."}},
+  {{"index": 2, "summarized_title": "...", "summarized_content": "..."}},
+  ...
+]"""
+
+            response = await llm_client.chat.completions.create(
+                model="deepseek-chat",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3,
+                max_tokens=2000
+            )
+
+            # 解析 LLM 返回的 JSON
+            response_text = response.choices[0].message.content.strip()
+            # 处理可能的 markdown 代码块
+            if response_text.startswith("```"):
+                response_text = response_text.split("```")[1]
+                if response_text.startswith("json"):
+                    response_text = response_text[4:]
+                response_text = response_text.strip()
+
+            summaries = json.loads(response_text)
+
+            # 构建结果
+            result = []
+            for i, item in enumerate(news_items):
+                # 找到对应的总结
+                summary = next((s for s in summaries if s.get("index") == i + 1), None)
+                if summary:
+                    result.append(SummarizedNewsItem(
+                        summarized_title=summary.get("summarized_title", item.title[:50]),
+                        summarized_content=summary.get("summarized_content", item.content[:100] if item.content else ""),
+                        original_title=item.title,
+                        url=item.url,
+                        published_date=item.published_date,
+                        source_type=item.source_type
+                    ))
+                else:
+                    # 降级：使用原标题
+                    result.append(SummarizedNewsItem(
+                        summarized_title=item.title[:50] if len(item.title) > 50 else item.title,
+                        summarized_content=item.content[:100] if item.content else "",
+                        original_title=item.title,
+                        url=item.url,
+                        published_date=item.published_date,
+                        source_type=item.source_type
+                    ))
+
+            print(f"[News] LLM 批量总结完成: {len(result)} 条")
+            return result
+
         except Exception as e:
             print(f"[News] LLM 总结失败，使用原标题: {e}")
             # 降级：使用原标题
@@ -587,6 +763,7 @@ class UnifiedTaskProcessorV3:
 
     async def _execute_chat_v3(
         self,
+        message: Message,
         session: Session,
         user_input: str,
         intent: UnifiedIntent,
@@ -603,7 +780,7 @@ class UnifiedTaskProcessorV3:
         step_num = 3 if intent.stock_mention else 2
 
         # === 并行数据获取 ===
-        session.update_step_detail(step_num, "running", "获取相关信息...")
+        message.update_step_detail(step_num, "running", "获取相关信息...")
 
         tasks = []
         task_names = []
@@ -631,11 +808,11 @@ class UnifiedTaskProcessorV3:
                 if not isinstance(result, Exception):
                     results[name] = result
 
-        session.update_step_detail(step_num, "completed", f"获取完成: {list(results.keys())}")
+        message.update_step_detail(step_num, "completed", f"获取完成: {list(results.keys())}")
 
         # === 生成回答 ===
         step_num += 1
-        session.update_step_detail(step_num, "running", "生成回答...")
+        message.update_step_detail(step_num, "running", "生成回答...")
 
         # 构建上下文
         context_parts = []
@@ -653,7 +830,14 @@ class UnifiedTaskProcessorV3:
         if "domain" in results and results["domain"]:
             context_parts.append("\n=== 即时新闻 ===")
             for item in results["domain"][:5]:
-                context_parts.append(f"- {item.get('title', '')}: {item.get('content', '')[:100]}")
+                title = item.get('title', '')
+                url = item.get('url', '')
+                content = item.get('content', '')[:100]
+                # 如果有 URL，使用 markdown 链接格式
+                if url:
+                    context_parts.append(f"[{title}]({url}): {content}")
+                else:
+                    context_parts.append(f"- {title}: {content}")
 
         context = "\n".join(context_parts) if context_parts else ""
 
@@ -665,13 +849,13 @@ class UnifiedTaskProcessorV3:
             context
         )
 
-        session.save_conclusion(answer)
+        message.save_conclusion(answer)
 
         # 保存来源
         if "rag" in results:
-            session.save_rag_sources(results["rag"])
+            message.save_rag_sources(results["rag"])
 
-        session.update_step_detail(step_num, "completed", "回答完成")
+        message.update_step_detail(step_num, "completed", "回答完成")
 
     async def _search_web(self, keywords: List[str]) -> List[dict]:
         """网络搜索"""
@@ -714,6 +898,7 @@ class UnifiedTaskProcessorV3:
                 items.append({
                     "title": row.get("新闻标题", ""),
                     "content": row.get("新闻内容", "")[:200] if row.get("新闻内容") else "",
+                    "url": row.get("新闻链接", ""),  # AkShare 可能提供新闻链接
                     "date": str(row.get("发布时间", ""))
                 })
             return items

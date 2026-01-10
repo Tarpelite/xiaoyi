@@ -116,28 +116,15 @@ class TavilyNewsClient:
             days: 搜索天数
             max_results: 结果数量
         """
-        # 构建搜索查询
-        query = f"{stock_name} 股票 新闻"
+        # 构建搜索查询 - 添加中文关键词提高相关性
+        query = f"{stock_name} 股票 最新消息"
 
-        # 中国财经网站域名
-        cn_finance_domains = [
-            "sina.com.cn",
-            "eastmoney.com",
-            "10jqka.com.cn",
-            "163.com",
-            "qq.com",
-            "hexun.com",
-            "caixin.com",
-            "yicai.com",
-            "wallstreetcn.com",
-        ]
-
+        # 不限制域名，让 Tavily 返回带日期的结果
         return self.search(
             query=query,
             days=days,
             max_results=max_results,
-            search_depth="advanced",  # 股票新闻使用深度搜索
-            include_domains=cn_finance_domains,
+            search_depth="advanced",
         )
 
     def _optimize_query(self, query: str) -> str:

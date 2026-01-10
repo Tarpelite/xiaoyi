@@ -113,8 +113,62 @@ export function MessageContent({ content }: MessageContentProps) {
   if (content.type === 'table') {
     const { title, headers, rows } = content
 
+    // 解析 markdown 链接格式 [text](url)
+    // 使用更健壮的解析方式，处理标题中含有 [ 或 ] 的情况
+    const parseMarkdownLink = (text: string): { text: string; url?: string } => {
+      // 查找最后一个 ]( 来分割标题和URL
+      const lastBracket = text.lastIndexOf('](')
+      if (text.startsWith('[') && lastBracket > 0 && text.endsWith(')')) {
+        const title = text.slice(1, lastBracket)
+        const url = text.slice(lastBracket + 2, -1)
+        if (url && url.startsWith('http')) {
+          return { text: title, url }
+        }
+      }
+      return { text }
+    }
+
+    // 渲染单元格内容（支持链接）
+    const renderCell = (cell: string | number, cellIndex: number) => {
+      if (typeof cell === 'number') {
+        return cell.toLocaleString()
+      }
+
+      // 检查是否是 markdown 链接格式
+      const parsed = parseMarkdownLink(cell)
+
+      if (parsed.url) {
+        // 有链接，渲染为可点击的链接
+        const displayText = parsed.text.length > 25
+          ? parsed.text.substring(0, 25) + '...'
+          : parsed.text
+        return (
+          <a
+            href={parsed.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-violet-400 hover:text-violet-300 hover:underline transition-colors"
+            title={parsed.text} // 鼠标悬停显示完整标题
+          >
+            {displayText}
+          </a>
+        )
+      }
+
+      // 第一列是标题，如果超过25个字则截断
+      if (cellIndex === 0 && cell.length > 25) {
+        return (
+          <span title={cell}>
+            {cell.substring(0, 25)}...
+          </span>
+        )
+      }
+
+      return cell
+    }
+
     return (
-      <div className="mt-2 overflow-x-auto">
+      <div className="mt-2 overflow-x-auto max-h-80 overflow-y-auto">
         {title && (
           <h4 className="text-sm font-medium text-gray-300 mb-3">{title}</h4>
         )}
@@ -137,28 +191,14 @@ export function MessageContent({ content }: MessageContentProps) {
                 key={rowIndex}
                 className="border-b border-white/5 hover:bg-dark-600/30 transition-colors"
               >
-                {row.map((cell, cellIndex) => {
-                  // 第一列是标题，如果超过25个字则截断
-                  if (cellIndex === 0 && typeof cell === 'string' && cell.length > 25) {
-                    return (
-                      <td
-                        key={cellIndex}
-                        className="px-4 py-2 text-sm text-gray-300"
-                        title={cell} // 鼠标悬停时显示完整标题
-                      >
-                        {cell.substring(0, 25)}...
-                      </td>
-                    )
-                  }
-                  return (
-                    <td
-                      key={cellIndex}
-                      className="px-4 py-2 text-sm text-gray-300"
-                    >
-                      {typeof cell === 'number' ? cell.toLocaleString() : cell}
-                    </td>
-                  )
-                })}
+                {row.map((cell, cellIndex) => (
+                  <td
+                    key={cellIndex}
+                    className="px-4 py-2 text-sm text-gray-300"
+                  >
+                    {renderCell(cell, cellIndex)}
+                  </td>
+                ))}
               </tr>
             ))}
           </tbody>

@@ -98,6 +98,8 @@ export interface Message {
   isCollapsing?: boolean
   // 渲染模式：thinking(思考中) / forecast(预测分析) / chat(简单对话)
   renderMode?: RenderMode
+  // 思考过程内容（LLM 实时推理）
+  thinkingContent?: string
 }
 
 // 预测步骤定义（6个步骤）- 与后端 FORECAST_STEPS 保持一致
@@ -147,6 +149,12 @@ export function ChatArea() {
   // 对话区域滚动容器 ref
   const chatContainerRef = useRef<HTMLDivElement>(null)
 
+  // 跟踪当前消息是否已经滚动过（用于控制只滚动两次：发送时+开始产生内容时）
+  const hasScrolledForContentRef = useRef(false)
+
+  // 防止 React 严格模式下重复加载历史
+  const historyLoadedRef = useRef(false)
+
   // 自动滚动到底部
   const scrollToBottom = () => {
     if (chatContainerRef.current) {
@@ -156,11 +164,6 @@ export function ChatArea() {
       })
     }
   }
-
-  // 消息更新时自动滚动
-  useEffect(() => {
-    scrollToBottom()
-  }, [messages])
 
   // 检测对话模式并触发坍缩动画
   useEffect(() => {
@@ -216,6 +219,71 @@ export function ChatArea() {
 
     return history
   }
+
+  // 页面加载时恢复会话历史
+  useEffect(() => {
+    const loadSessionHistory = async () => {
+      // 防止 React 严格模式下重复加载
+      if (historyLoadedRef.current) return
+      historyLoadedRef.current = true
+
+      if (!sessionId) return
+
+      try {
+        const { getSessionHistory } = await import('@/lib/api/analysis')
+        const history = await getSessionHistory(sessionId)
+
+        if (history && history.messages && history.messages.length > 0) {
+          // 将后端历史消息转换为前端 Message 格式
+          // 只加载已完成的消息，跳过 processing/pending 状态的消息
+          const loadedMessages: Message[] = []
+
+          for (const historyMsg of history.messages) {
+            // 只处理已完成的消息
+            if (historyMsg.status !== 'completed' || !historyMsg.data) {
+              continue
+            }
+
+            const data = historyMsg.data
+
+            // 添加用户消息
+            loadedMessages.push({
+              id: `user-${historyMsg.message_id}`,
+              role: 'user',
+              text: historyMsg.user_query,
+              timestamp: new Date(data.created_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
+            })
+
+            // 添加助手消息
+            const isForecastIntent = data.intent === 'forecast' ||
+              (data.unified_intent && data.unified_intent.is_forecast)
+
+            // 转换内容
+            const contents = convertAnalysisToContents(data, data.steps, 'completed')
+
+            loadedMessages.push({
+              id: `assistant-${historyMsg.message_id}`,
+              role: 'assistant',
+              timestamp: new Date(data.updated_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
+              contents: contents.length > 0 ? contents : [{
+                type: 'text',
+                text: data.conclusion || '已完成分析'
+              }],
+              renderMode: isForecastIntent ? 'forecast' : 'chat',
+            })
+          }
+
+          if (loadedMessages.length > 0) {
+            setMessages(loadedMessages)
+          }
+        }
+      } catch (error) {
+        console.error('加载会话历史失败:', error)
+      }
+    }
+
+    loadSessionHistory()
+  }, []) // 只在组件挂载时执行一次
 
   // 更新快速追问建议（在对话完成后）
   useEffect(() => {
@@ -335,13 +403,15 @@ export function ChatArea() {
     }
 
     // 2. 新闻列表表格（步骤3"数据获取"完成后显示）
+    // 显示全部新闻（最多10条：5条AkShare + 5条Tavily）
     if ((currentStep >= 3 || isCompleted) && data.news_list && data.news_list.length > 0) {
       contents.push({
         type: 'table',
         title: '', // 标题由外层MessageBubble显示"相关新闻"，这里不重复显示
         headers: ['标题', '来源', '日期'],
-        rows: data.news_list.slice(0, 5).map((news) => [
-          news.summarized_title,
+        rows: data.news_list.slice(0, 10).map((news) => [
+          // 如果有 URL，使用 markdown 链接格式 [标题](url)；否则只显示标题
+          news.url ? `[${news.summarized_title}](${news.url})` : news.summarized_title,
           news.source_type === 'search' ? '网络搜索' : '领域资讯',
           news.published_date
         ])
@@ -443,6 +513,12 @@ export function ChatArea() {
     setInputValue('')
     setIsLoading(true)
 
+    // 发送消息后滚动一次
+    setTimeout(scrollToBottom, 50)
+
+    // 重置滚动标记，准备在收到内容时再滚动一次
+    hasScrolledForContentRef.current = false
+
     // 创建AI消息占位符（清空旧内容）
     const assistantMessageId = (Date.now() + 1).toString()
     const assistantMessage: Message = {
@@ -456,22 +532,57 @@ export function ChatArea() {
     setMessages((prev: Message[]) => [...prev, assistantMessage])
 
     try {
-      // 使用 analysis API
-      const { createAnalysisTask, pollAnalysisStatus } = await import('@/lib/api/analysis')
+      // 使用 analysis API - 流式获取思考内容
+      const { streamAnalysisTask, pollAnalysisStatus, getAnalysisStatus } = await import('@/lib/api/analysis')
 
-      // 创建分析任务（传递当前 sessionId 以获取对话历史）
-      const result = await createAnalysisTask(messageToSend, 'prophet', '', sessionId)
-      const currentSessionId = result.session_id
+      // 阶段1: 使用 SSE 流式获取思考内容
+      const { session_id: currentSessionId, message_id: currentMessageId } = await streamAnalysisTask(
+        messageToSend,
+        {
+          // 实时更新思考内容
+          onThinking: (content: string) => {
+            // 第一次收到内容时滚动一次
+            if (!hasScrolledForContentRef.current && content.length > 0) {
+              hasScrolledForContentRef.current = true
+              setTimeout(scrollToBottom, 50)
+            }
+            setMessages((prev: Message[]) => prev.map((msg: Message) =>
+              msg.id === assistantMessageId
+                ? { ...msg, thinkingContent: content }
+                : msg
+            ))
+          },
+          // 收到意图后更新渲染模式
+          onIntent: (intent: string, isForecast: boolean) => {
+            const renderMode: RenderMode = isForecast ? 'forecast' : 'chat'
+            setMessages((prev: Message[]) => prev.map((msg: Message) =>
+              msg.id === assistantMessageId
+                ? { ...msg, renderMode }
+                : msg
+            ))
+          },
+          // 错误处理
+          onError: (errorMsg: string) => {
+            console.error('Stream error:', errorMsg)
+          }
+        },
+        'prophet',
+        '',
+        sessionId
+      )
+
+      // 更新 sessionId（首次创建或复用）
       setSessionId(currentSessionId)
       if (typeof window !== 'undefined') {
         localStorage.setItem('chat_session_id', currentSessionId)
       }
 
-      // 如果任务立即完成（intent == "answer"），立即查询一次状态
-      if (result.status === 'completed' || result.intent === 'answer') {
-        const { getAnalysisStatus } = await import('@/lib/api/analysis')
-        const statusResponse = await getAnalysisStatus(currentSessionId)
-        const { data, status } = statusResponse
+      // 阶段2: 流结束后，查询一次状态判断是否需要轮询
+      const initialStatus = await getAnalysisStatus(currentSessionId, currentMessageId)
+
+      // 如果任务已完成（如简单问答），直接显示结果
+      if (initialStatus.status === 'completed') {
+        const { data } = initialStatus
 
         // 简单问答：只显示文本内容，renderMode 为 chat
         setMessages((prev: Message[]) => prev.map((msg: Message) =>
@@ -488,14 +599,14 @@ export function ChatArea() {
             : msg
         ))
       } else {
-        // 轮询状态（intent == "analyze"）
+        // 轮询状态（使用 message_id 确保轮询正确的消息）
         await pollAnalysisStatus(
           currentSessionId,
+          currentMessageId,
           (statusResponse) => {
             const { data, steps: currentStep, status } = statusResponse
 
             // 🎯 根据后端返回的 intent 决定渲染模式
-            // data.intent: "forecast" | "chat" | "rag" | "news" | "out_of_scope" | "pending"
             const isForecastIntent = data.intent === 'forecast' ||
               (data.unified_intent && data.unified_intent.is_forecast)
 
@@ -531,7 +642,7 @@ export function ChatArea() {
               // 转换内容（传入当前步骤和状态，只显示已完成步骤的内容）
               const contents = convertAnalysisToContents(data, currentStep, status)
 
-              // 更新消息
+              // 更新消息（保留 thinkingContent）
               setMessages((prev: Message[]) => prev.map((msg: Message) =>
                 msg.id === assistantMessageId
                   ? {
@@ -544,7 +655,7 @@ export function ChatArea() {
               ))
             }
           },
-          2000 // 轮询间隔2秒
+          500 // 轮询间隔 500ms (推荐)
         )
       }
 

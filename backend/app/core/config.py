@@ -17,6 +17,9 @@ class Settings:
     # Server settings
     HOST: str = os.getenv("HOST", "0.0.0.0")
     PORT: int = int(os.getenv("PORT", "8000"))
+
+    # External Services
+    RAG_SERVICE_URL: str = os.getenv("RAG_SERVICE_URL", "")
     
     # CORS settings
     CORS_ORIGINS: list[str] = [

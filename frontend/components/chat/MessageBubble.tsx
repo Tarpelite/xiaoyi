@@ -6,6 +6,7 @@ import { Copy, ThumbsUp, ThumbsDown, RotateCcw, ChevronDown, ChevronRight, Brain
 import type { Message, IntentInfo, RenderMode } from './ChatArea'
 import { MessageContent } from './MessageContent'
 import { StepProgress } from './StepProgress'
+import { ThinkingSection } from './ThinkingSection'
 
 interface MessageBubbleProps {
   message: Message
@@ -208,6 +209,14 @@ export function MessageBubble({ message }: MessageBubbleProps) {
               <IntentBadge intentInfo={message.intentInfo} />
             )}
 
+            {/* 思考过程 - 在有思考内容时显示（可展开） */}
+            {message.thinkingContent && (
+              <ThinkingSection
+                content={message.thinkingContent}
+                isLoading={message.renderMode === 'thinking'}
+              />
+            )}
+
             {/* 步骤进度 - 只在 forecast 模式下显示 */}
             {message.renderMode === 'forecast' && message.steps && message.steps.length > 0 && (
               <div className="glass rounded-2xl px-6 py-4">
@@ -226,15 +235,14 @@ export function MessageBubble({ message }: MessageBubbleProps) {
                 contents.push({ type: 'text', text: displayText })
               }
 
-              // 🎯 renderMode === 'thinking': 显示思考中动画
-              if (renderMode === 'thinking' && !hasContents && !displayText && !message.steps) {
+              // 🎯 renderMode === 'thinking': 显示可展开的思考过程
+              // 注意：如果已经在上面通过 message.thinkingContent 显示了 ThinkingSection，这里就不再显示
+              if (renderMode === 'thinking' && !hasContents && !displayText && !message.steps && !message.thinkingContent) {
                 return (
-                  <div className="glass rounded-2xl px-4 py-3 text-gray-400">
-                    <div className="flex items-center gap-2">
-                      <div className="w-2 h-2 bg-violet-400 rounded-full animate-pulse" />
-                      <span className="text-sm">思考中...</span>
-                    </div>
-                  </div>
+                  <ThinkingSection
+                    content=""
+                    isLoading={true}
+                  />
                 )
               }
 

@@ -1,16 +1,4 @@
 services:
-  # ===== Qdrant 向量数据库 =====
-  qdrant:
-    image: aqtbrodh2awvkc.xuanyuan.run/qdrant/qdrant:latest
-    container_name: xiaoyi-qdrant
-    restart: unless-stopped
-    ports:
-      - "6333:6333"
-    volumes:
-      - ./qdrant_storage:/qdrant/storage
-    networks:
-      - xiaoyi-network
-
   # ===== Redis 服务 =====
   redis:
     image: aqtbrodh2awvkc.xuanyuan.run/redis:7-alpine
@@ -65,16 +53,15 @@ services:
       - REDIS_PORT=6379
       - REDIS_DB=0
       - TZ=Asia/Shanghai
-      - QDRANT_HOST=qdrant
-      - QDRANT_PORT=6333
+      # 外部服务地址
+      - QDRANT_HOST=${QDRANT_HOST:-10.139.197.44}
+      - QDRANT_PORT=${QDRANT_PORT:-6333}
+      - RAG_SERVICE_URL=${RAG_SERVICE_URL}
       - HF_ENDPOINT=https://hf-mirror.com
       - HF_TOKEN=${HF_TOKEN}
     volumes:
-      - ./energy_reports_test:/app/energy_reports_test
       - ${HOME}/.cache/huggingface:/root/.cache/huggingface
     depends_on:
-      qdrant:
-        condition: service_started
       redis:
         condition: service_healthy
     healthcheck:

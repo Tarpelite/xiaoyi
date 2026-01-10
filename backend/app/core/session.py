@@ -3,6 +3,10 @@ Session 管理模块
 =================
 
 基于 Redis 的会话状态管理
+
+架构:
+- Session: 一整个多轮对话 (存储 session_id, conversation_history, message_ids)
+- Message: 一轮 QA (存储所有分析结果数据)
 """
 
 import json
@@ -14,6 +18,7 @@ from redis import Redis
 from app.core.redis_client import get_redis
 from app.schemas.session_schema import (
     SessionData,
+    MessageData,
     SessionStatus,
     StepStatus,
     StepDetail,
@@ -28,61 +33,64 @@ from app.schemas.session_schema import (
 from app.core.step_definitions import get_steps_for_intent
 
 
-class Session:
+class Message:
     """
-    会话管理器
+    单轮 QA 管理器
 
-    基于 Redis 存储会话状态，支持预测和非预测两种流程
+    存储单轮对话的所有分析结果数据
     """
 
-    def __init__(self, session_id: str, redis_client: Optional[Redis] = None):
+    def __init__(self, message_id: str, session_id: str, redis_client: Optional[Redis] = None):
+        self.message_id = message_id
         self.session_id = session_id
         self.redis = redis_client or get_redis()
-        self.key = f"session:{session_id}"
+        self.key = f"message:{message_id}"
         self.ttl = 86400  # 24小时过期
 
     @classmethod
-    def create(cls, context: str = "", model_name: str = "prophet") -> "Session":
-        """创建新会话"""
-        session_id = str(uuid.uuid4())
-        session = cls(session_id)
+    def create(cls, session_id: str, user_query: str, model_name: str = "prophet") -> "Message":
+        """创建新消息"""
+        message_id = str(uuid.uuid4())
+        message = cls(message_id, session_id)
 
         now = datetime.now().isoformat()
-        initial_data = SessionData(
+        initial_data = MessageData(
+            message_id=message_id,
             session_id=session_id,
-            context=context,
+            user_query=user_query,
             model_name=model_name,
             status=SessionStatus.PENDING,
             created_at=now,
             updated_at=now
         )
 
-        session._save(initial_data)
-        return session
+        message._save(initial_data)
+        print(f"[Message] Created: {message_id} for session {session_id}")
+        return message
 
     @classmethod
-    def exists(cls, session_id: str) -> bool:
-        """检查会话是否存在"""
+    def exists(cls, message_id: str) -> bool:
+        """检查消息是否存在"""
         redis = get_redis()
-        return redis.exists(f"session:{session_id}") > 0
+        return redis.exists(f"message:{message_id}") > 0
 
-    def get(self) -> Optional[SessionData]:
-        """获取会话数据"""
+    def get(self) -> Optional[MessageData]:
+        """获取消息数据"""
         data = self.redis.get(self.key)
         if not data:
             return None
-        return SessionData.model_validate_json(data)
+        return MessageData.model_validate_json(data)
 
-    def _save(self, data: SessionData):
-        """保存会话数据"""
+    def _save(self, data: MessageData):
+        """保存消息数据"""
         data.updated_at = datetime.now().isoformat()
         json_data = data.model_dump_json()
         self.redis.setex(self.key, self.ttl, json_data)
 
     def delete(self):
-        """删除会话"""
+        """删除消息"""
         self.redis.delete(self.key)
-        print(f"[Session] Deleted: {self.session_id}")
+        print(f"[Message] Deleted: {self.message_id}")
 
     # ========== 意图相关 ==========
 
@@ -114,7 +122,7 @@ class Session:
             ]
 
             self._save(data)
-            print(f"[Session] Intent: {data.intent}, forecast={intent.is_forecast}")
+            print(f"[Message] Intent: {data.intent}, forecast={intent.is_forecast}")
 
     # ========== 股票相关 ==========
 
@@ -126,7 +134,7 @@ class Session:
             if result.success and result.stock_info:
                 data.stock_code = result.stock_info.stock_code
             self._save(data)
-            print(f"[Session] Stock match: {result.success}")
+            print(f"[Message] Stock match: {result.success}")
 
     def save_resolved_keywords(self, keywords: ResolvedKeywords):
         """保存最终关键词"""
@@ -146,7 +154,7 @@ class Session:
             data.step_details[step - 1].status = StepStatus(status)
             data.step_details[step - 1].message = message
             self._save(data)
-            print(f"[Session] Step {step}/{data.total_steps} [{status}]: {message}")
+            print(f"[Message] Step {step}/{data.total_steps} [{status}]: {message}")
 
     # ========== 数据保存 ==========
 
@@ -214,7 +222,7 @@ class Session:
                 if step.status != StepStatus.ERROR:
                     step.status = StepStatus.COMPLETED
             self._save(data)
-            print(f"[Session] Completed: {self.session_id}")
+            print(f"[Message] Completed: {self.message_id}")
 
     def mark_error(self, error_message: str):
         """标记为错误"""
@@ -223,7 +231,112 @@ class Session:
             data.status = SessionStatus.ERROR
             data.error_message = error_message
             self._save(data)
-            print(f"[Session] Error: {error_message}")
+            print(f"[Message] Error: {error_message}")
+
+
+class Session:
+    """
+    会话管理器 (多轮对话容器)
+
+    存储全局信息和消息列表，每个消息的详细数据在 Message 中
+    """
+
+    def __init__(self, session_id: str, redis_client: Optional[Redis] = None):
+        self.session_id = session_id
+        self.redis = redis_client or get_redis()
+        self.key = f"session:{session_id}"
+        self.ttl = 86400  # 24小时过期
+
+    @classmethod
+    def create(cls, context: str = "", model_name: str = "prophet") -> "Session":
+        """创建新会话"""
+        session_id = str(uuid.uuid4())
+        session = cls(session_id)
+
+        now = datetime.now().isoformat()
+        initial_data = SessionData(
+            session_id=session_id,
+            context=context,
+            model_name=model_name,
+            created_at=now,
+            updated_at=now
+        )
+
+        session._save(initial_data)
+        print(f"[Session] Created: {session_id}")
+        return session
+
+    @classmethod
+    def exists(cls, session_id: str) -> bool:
+        """检查会话是否存在"""
+        redis = get_redis()
+        return redis.exists(f"session:{session_id}") > 0
+
+    def get(self) -> Optional[SessionData]:
+        """获取会话数据"""
+        data = self.redis.get(self.key)
+        if not data:
+            return None
+        return SessionData.model_validate_json(data)
+
+    def _save(self, data: SessionData):
+        """保存会话数据"""
+        data.updated_at = datetime.now().isoformat()
+        json_data = data.model_dump_json()
+        self.redis.setex(self.key, self.ttl, json_data)
+
+    def delete(self):
+        """删除会话及其所有消息"""
+        data = self.get()
+        if data:
+            # 删除所有关联的消息
+            for message_id in data.message_ids:
+                msg = Message(message_id, self.session_id)
+                msg.delete()
+        self.redis.delete(self.key)
+        print(f"[Session] Deleted: {self.session_id}")
+
+    # ========== 消息管理 ==========
+
+    def create_message(self, user_query: str) -> Message:
+        """创建新消息"""
+        data = self.get()
+        if not data:
+            raise ValueError(f"Session {self.session_id} not found")
+
+        # 创建消息
+        message = Message.create(
+            session_id=self.session_id,
+            user_query=user_query,
+            model_name=data.model_name
+        )
+
+        # 添加到 session
+        data.message_ids.append(message.message_id)
+        data.current_message_id = message.message_id
+        self._save(data)
+
+        return message
+
+    def get_current_message(self) -> Optional[Message]:
+        """获取当前正在处理的消息"""
+        data = self.get()
+        if data and data.current_message_id:
+            return Message(data.current_message_id, self.session_id)
+        return None
+
+    def get_message(self, message_id: str) -> Optional[Message]:
+        """获取指定消息"""
+        if Message.exists(message_id):
+            return Message(message_id, self.session_id)
+        return None
+
+    def get_all_messages(self) -> List[Message]:
+        """获取所有消息"""
+        data = self.get()
+        if not data:
+            return []
+        return [Message(mid, self.session_id) for mid in data.message_ids if Message.exists(mid)]
 
     # ========== 对话历史 ==========
 
@@ -240,30 +353,3 @@ class Session:
             if len(data.conversation_history) > 20:
                 data.conversation_history = data.conversation_history[-20:]
             self._save(data)
-
-    def reset_for_new_query(self):
-        """重置会话状态（用于多轮对话的新查询）"""
-        data = self.get()
-        if data:
-            data.status = SessionStatus.PENDING
-            data.steps = 0
-            data.intent = "pending"
-            data.unified_intent = None
-            data.stock_match = None
-            data.resolved_keywords = None
-            data.total_steps = 0
-            data.step_details = []
-            data.time_series_original = []
-            data.time_series_full = []
-            data.prediction_done = False
-            data.prediction_start_day = None
-            data.news_list = []
-            data.report_list = []
-            data.rag_sources = []
-            data.emotion = None
-            data.emotion_des = None
-            data.conclusion = ""
-            data.error_message = None
-            data.is_forecast = False
-            self._save(data)
-            print(f"[Session] Reset for new query")

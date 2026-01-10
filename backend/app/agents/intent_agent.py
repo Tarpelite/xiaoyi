@@ -11,7 +11,7 @@
 - 预测参数: forecast_model, history_days, forecast_horizon
 """
 
-from typing import Dict, List, Optional, Generator
+from typing import Dict, List, Optional, Generator, Callable, Tuple
 import json
 from openai import OpenAI
 
@@ -55,18 +55,20 @@ class IntentAgent:
 
 ## 服务范围 (is_in_scope)
 
-判断问题是否在服务范围内（金融、股票、投资、经济相关）：
-- in_scope=true:
-  - 股票分析/预测（如"分析茅台走势"、"预测比亚迪"）
-  - 金融新闻查询（如"最近有什么股市新闻"）
-  - 研报查询（如"茅台的研报观点"）
-  - 宏观经济问题（如"经济形势怎么样"）
-  - 投资相关问题（如"该买什么股票"）
-  - 金融闲聊（如"你好"、"谢谢" - 金融助手礼貌性回复）
+**原则：尽可能帮助用户，宽松判断，只对明显无关的问题拒绝**
 
-- in_scope=false:
-  - 完全无关的问题（如"今天天气怎么样"、"北京有什么好吃的"、"帮我写代码"）
-  - 此时必须设置 out_of_scope_reply 友好拒绝
+- in_scope=true（绝大多数情况）:
+  - 股票分析/预测（如"分析茅台走势"、"预测比亚迪"）
+  - 金融/经济/投资相关问题
+  - 研报/新闻查询
+  - 日常闲聊、打招呼（如"你好"、"谢谢"）
+  - 关于助手自身的问题（如"你是谁"、"你能做什么"）
+  - 任何可以用金融知识或常识回答的问题
+  - 模糊边界的问题（先尝试回答）
+
+- in_scope=false（仅限明显不相关）:
+  - 明确要求非金融服务（如"帮我写代码"、"翻译这段话"、"写一首诗"）
+  - 此时设置 out_of_scope_reply 友好拒绝并说明能力范围
 
 ## 预测判断 (is_forecast)
 
@@ -103,12 +105,26 @@ class IntentAgent:
 - 非预测的新闻查询，如果用户只是随便问问，开启 enable_domain_info
 - 非预测的明确搜索，开启 enable_search
 
-## 股票提取 (stock_mention)
+## 股票提取 (stock_mention + stock_full_name)
 
 从用户问题中提取提到的股票名称/代码：
-- 单股票: "茅台"、"600519"、"比亚迪"
-- 多股票: "茅台,五粮液" (逗号分隔)
-- 无股票: 留空
+- stock_mention: 用户原始输入的股票名称/代码
+  - 单股票: "茅台"、"600519"、"比亚迪"
+  - 多股票: "茅台,五粮液" (逗号分隔)
+  - 无股票: 留空
+
+- stock_full_name: 你需要根据知识，将用户输入的简称/别名转换为官方股票全称
+  - "茅台"/"茅子" → "贵州茅台"
+  - "中石油" → "中国石油"
+  - "宁德"/"CATL" → "宁德时代"
+  - "招行" → "招商银行"
+  - "工行"/"宇宙行" → "工商银行"
+  - "平安" → "中国平安"
+  - "汾酒" → "山西汾酒"
+  - 如果用户输入的已经是全称，直接使用
+  - 如果是股票代码，尝试转换为名称，如无法确定则保持代码
+  - 多股票时用逗号分隔: "贵州茅台,五粮液"
+  - 无股票: 留空
 
 ## 关键词提取 (raw_*_keywords)
 
@@ -140,7 +156,8 @@ class IntentAgent:
     "enable_rag": true/false,
     "enable_search": true/false,
     "enable_domain_info": true/false,
-    "stock_mention": "股票名称或空字符串",
+    "stock_mention": "用户原始输入的股票名称或空字符串",
+    "stock_full_name": "转换后的官方股票全称或空字符串",
     "raw_search_keywords": ["关键词1", "关键词2"],
     "raw_rag_keywords": ["关键词1"],
     "raw_domain_keywords": ["关键词1"],
@@ -185,6 +202,7 @@ class IntentAgent:
             enable_search=result.get("enable_search", False),
             enable_domain_info=result.get("enable_domain_info", False),
             stock_mention=result.get("stock_mention") or None,
+            stock_full_name=result.get("stock_full_name") or None,
             raw_search_keywords=result.get("raw_search_keywords", []),
             raw_rag_keywords=result.get("raw_rag_keywords", []),
             raw_domain_keywords=result.get("raw_domain_keywords", []),
@@ -194,6 +212,163 @@ class IntentAgent:
             reason=result.get("reason", ""),
             out_of_scope_reply=result.get("out_of_scope_reply")
         )
+
+    def recognize_intent_streaming(
+        self,
+        user_query: str,
+        conversation_history: Optional[List[Dict[str, str]]] = None,
+        on_thinking_chunk: Optional[Callable[[str], None]] = None
+    ) -> Tuple[UnifiedIntent, str]:
+        """
+        流式意图识别 - 实时返回思考过程
+
+        Args:
+            user_query: 用户问题
+            conversation_history: 对话历史
+            on_thinking_chunk: 回调函数，接收思考内容片段
+
+        Returns:
+            (UnifiedIntent, 完整思考内容)
+        """
+        # 使用带思考过程的 prompt
+        system_prompt = """你是金融时序分析助手的意图识别模块。请先分析用户意图，然后返回结果。
+
+## 分析步骤（请详细描述你的思考过程）
+
+1. **理解问题**: 用户在问什么？是否涉及金融/股票/投资？
+2. **判断范围**: 是否在服务范围内？
+3. **识别意图**: 是否需要预测分析？还是只是查询/闲聊？
+4. **提取信息**: 提到了哪些股票？需要哪些工具？
+5. **设置参数**: 如果需要预测，设置预测参数
+
+## 服务范围 (is_in_scope) - 宽松判断
+- true: 金融/投资/经济相关问题、日常闲聊、关于助手的问题、任何可以回答的问题
+- false: 仅限明确要求非金融服务（如写代码、翻译），需设置 out_of_scope_reply
+
+## 预测判断 (is_forecast)
+- true: 明确要求分析/预测股票走势
+- false: 只是查询新闻/研报、闲聊或追问
+
+## 工具开关
+- enable_rag: 研报知识库检索
+- enable_search: 网络搜索
+- enable_domain_info: 领域信息获取（股票新闻、行情）
+
+## 预测参数（仅 is_forecast=true）
+- forecast_model: prophet/xgboost/randomforest/dlinear
+- history_days: 历史数据天数
+- forecast_horizon: 预测天数
+
+请先输出你的思考过程，然后用 ```json 代码块输出结果：
+```json
+{
+    "is_in_scope": true/false,
+    "is_forecast": true/false,
+    "enable_rag": true/false,
+    "enable_search": true/false,
+    "enable_domain_info": true/false,
+    "stock_mention": "用户原始输入的股票名称或空字符串",
+    "stock_full_name": "转换后的官方股票全称或空字符串",
+    "raw_search_keywords": ["关键词"],
+    "raw_rag_keywords": ["关键词"],
+    "raw_domain_keywords": ["关键词"],
+    "forecast_model": "prophet",
+    "history_days": 365,
+    "forecast_horizon": 30,
+    "reason": "简短判断理由",
+    "out_of_scope_reply": null
+}
+```"""
+
+        messages = [{"role": "system", "content": system_prompt}]
+
+        # 添加对话历史
+        if conversation_history:
+            recent_history = conversation_history[-6:] if len(conversation_history) > 6 else conversation_history
+            for msg in recent_history:
+                messages.append({
+                    "role": msg["role"],
+                    "content": msg["content"]
+                })
+
+        messages.append({
+            "role": "user",
+            "content": f"用户问题: {user_query}\n\n请分析意图。"
+        })
+
+        # 流式调用
+        response = self.client.chat.completions.create(
+            model="deepseek-chat",
+            messages=messages,
+            temperature=0.1,
+            stream=True
+        )
+
+        full_content = ""
+        thinking_content = ""
+        in_json_block = False
+
+        for chunk in response:
+            if chunk.choices and chunk.choices[0].delta.content:
+                delta = chunk.choices[0].delta.content
+                full_content += delta
+
+                # 检测 JSON 代码块
+                if "```json" in full_content and not in_json_block:
+                    in_json_block = True
+                    # 提取 JSON 之前的内容作为思考内容
+                    thinking_content = full_content.split("```json")[0].strip()
+
+                if in_json_block:
+                    # 在 JSON 块中，不输出到思考内容
+                    pass
+                else:
+                    # 输出思考内容
+                    if on_thinking_chunk:
+                        on_thinking_chunk(delta)
+
+        # 提取 JSON 结果
+        try:
+            if "```json" in full_content:
+                json_str = full_content.split("```json")[1]
+                if "```" in json_str:
+                    json_str = json_str.split("```")[0]
+                result = json.loads(json_str.strip())
+            else:
+                # 尝试直接解析
+                result = json.loads(full_content)
+        except json.JSONDecodeError:
+            # 解析失败，返回默认值
+            print(f"[IntentAgent] JSON 解析失败: {full_content}")
+            result = {
+                "is_in_scope": True,
+                "is_forecast": False,
+                "reason": "解析失败，使用默认值"
+            }
+
+        # 如果没有分离出思考内容，使用 reason
+        if not thinking_content:
+            thinking_content = result.get("reason", "")
+
+        intent = UnifiedIntent(
+            is_in_scope=result.get("is_in_scope", True),
+            is_forecast=result.get("is_forecast", False),
+            enable_rag=result.get("enable_rag", False),
+            enable_search=result.get("enable_search", False),
+            enable_domain_info=result.get("enable_domain_info", False),
+            stock_mention=result.get("stock_mention") or None,
+            stock_full_name=result.get("stock_full_name") or None,
+            raw_search_keywords=result.get("raw_search_keywords", []),
+            raw_rag_keywords=result.get("raw_rag_keywords", []),
+            raw_domain_keywords=result.get("raw_domain_keywords", []),
+            forecast_model=result.get("forecast_model", "prophet"),
+            history_days=result.get("history_days", 365),
+            forecast_horizon=result.get("forecast_horizon", 30),
+            reason=result.get("reason", ""),
+            out_of_scope_reply=result.get("out_of_scope_reply")
+        )
+
+        return intent, thinking_content
 
     def resolve_keywords(
         self,

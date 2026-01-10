@@ -4,24 +4,31 @@
 
 提供统一的异步分析接口，支持 forecast/rag/news/chat 四种意图
 
+架构:
+- Session: 一整个多轮对话 (复用同一 session_id)
+- Message: 每轮 QA (每次查询创建新 message_id)
+
 轮询间隔建议: 0.5s (500ms)
 """
 
 import asyncio
+import json
+import concurrent.futures
 from typing import Optional
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.core.config import settings
-from app.core.session import Session
+from app.core.session import Session, Message
 from app.core.unified_tasks import get_task_processor
 from app.schemas.session_schema import (
     CreateAnalysisRequest,
     AnalysisStatusResponse,
     SessionStatus
 )
-from app.agents import SuggestionAgent
+from app.agents import SuggestionAgent, IntentAgent
 
 
 class SuggestionsRequest(BaseModel):
@@ -49,6 +56,10 @@ async def create_analysis_task(
     - news: 新闻搜索（2步）
     - chat: 纯对话（1步）
 
+    架构说明:
+    - Session: 整个多轮对话复用同一 session_id
+    - Message: 每次查询创建新 message_id，存储该轮分析结果
+
     Args:
         request: 请求体
             - message: 用户问题
@@ -60,6 +71,7 @@ async def create_analysis_task(
     Returns:
         {
             "session_id": "uuid-xxx",
+            "message_id": "uuid-yyy",
             "status": "created"
         }
     """
@@ -68,25 +80,29 @@ async def create_analysis_task(
     except ValueError as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-    # 获取或创建 session
+    # 获取或创建 Session
     if request.session_id and Session.exists(request.session_id):
+        # 复用已有 session
         session = Session(request.session_id)
-        # 复用现有会话，重置状态
-        session.reset_for_new_query()
     else:
+        # 创建新 session
         session = Session.create(
             context=request.context,
             model_name=request.model
         )
 
-    # 添加用户消息到历史
+    # 为本次查询创建新 Message
+    message = session.create_message(request.message)
+
+    # 添加用户消息到对话历史
     session.add_conversation_message("user", request.message)
 
-    # 在后台启动任务
+    # 在后台启动任务 (传入 message_id)
     task_processor = get_task_processor(api_key)
     background_tasks.add_task(
         task_processor.execute,
         session.session_id,
+        message.message_id,  # 新增: 传入 message_id
         request.message,
         request.model,
         request.force_intent
@@ -94,12 +110,16 @@ async def create_analysis_task(
 
     return {
         "session_id": session.session_id,
+        "message_id": message.message_id,
         "status": "created"
     }
 
 
 @router.get("/status/{session_id}", response_model=AnalysisStatusResponse)
-async def get_analysis_status(session_id: str):
+async def get_analysis_status(
+    session_id: str,
+    message_id: Optional[str] = Query(default=None, description="消息ID，不传则返回当前消息")
+):
     """
     查询分析任务状态
 
@@ -107,28 +127,89 @@ async def get_analysis_status(session_id: str):
 
     Args:
         session_id: 会话 ID
+        message_id: 消息 ID（可选，不传则返回当前正在处理的消息）
 
     Returns:
-        AnalysisStatusResponse: 包含完整会话数据
+        AnalysisStatusResponse: 包含消息数据
             - session_id: 会话 ID
+            - message_id: 消息 ID
             - status: 状态 (pending/processing/completed/error)
             - steps: 当前步骤
             - total_steps: 总步骤数
-            - data: 完整会话数据
+            - data: 消息数据 (MessageData)
     """
-    session = Session(session_id)
-    data = session.get()
-
-    if not data:
+    if not Session.exists(session_id):
         raise HTTPException(status_code=404, detail="会话不存在")
 
+    session = Session(session_id)
+
+    # 获取指定消息或当前消息
+    if message_id:
+        message = session.get_message(message_id)
+        if not message:
+            raise HTTPException(status_code=404, detail="消息不存在")
+    else:
+        message = session.get_current_message()
+        if not message:
+            raise HTTPException(status_code=404, detail="无活动消息")
+
+    data = message.get()
+    if not data:
+        raise HTTPException(status_code=404, detail="消息数据不存在")
+
     return AnalysisStatusResponse(
-        session_id=data.session_id,
+        session_id=session_id,
+        message_id=message.message_id,
         status=data.status,
         steps=data.steps,
         total_steps=data.total_steps,
         data=data
     )
+
+
+@router.get("/history/{session_id}")
+async def get_session_history(session_id: str):
+    """
+    获取会话历史（用于页面刷新后恢复）
+
+    Args:
+        session_id: 会话 ID
+
+    Returns:
+        {
+            "session_id": "uuid-xxx",
+            "messages": [
+                {
+                    "message_id": "uuid-yyy",
+                    "user_query": "用户问题",
+                    "status": "completed",
+                    "data": MessageData
+                },
+                ...
+            ]
+        }
+    """
+    if not Session.exists(session_id):
+        raise HTTPException(status_code=404, detail="会话不存在")
+
+    session = Session(session_id)
+    all_messages = session.get_all_messages()
+
+    messages = []
+    for msg in all_messages:
+        data = msg.get()
+        if data:
+            messages.append({
+                "message_id": msg.message_id,
+                "user_query": data.user_query,
+                "status": data.status,
+                "data": data
+            })
+
+    return {
+        "session_id": session_id,
+        "messages": messages
+    }
 
 
 @router.delete("/{session_id}")
@@ -192,3 +273,129 @@ async def get_suggestions(request: SuggestionsRequest):
     )
 
     return {"suggestions": suggestions}
+
+
+@router.post("/stream")
+async def stream_analysis(
+    request: CreateAnalysisRequest,
+    background_tasks: BackgroundTasks
+):
+    """
+    流式分析接口 - 实时返回思考过程
+
+    SSE 事件类型:
+    - thinking: 思考内容片段 {"type": "thinking", "content": "..."}
+    - session: 会话信息 {"type": "session", "session_id": "...", "message_id": "..."}
+    - intent: 意图结果 {"type": "intent", "intent": "forecast|chat|...", "is_forecast": true|false}
+    - done: 思考完成 {"type": "done"}
+
+    完成后前端使用 polling 获取后续分析结果
+    """
+    try:
+        api_key = settings.api_key
+    except ValueError as e:
+        async def error_stream():
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+        return StreamingResponse(error_stream(), media_type="text/event-stream")
+
+    # 获取或创建 Session
+    if request.session_id and Session.exists(request.session_id):
+        session = Session(request.session_id)
+    else:
+        session = Session.create(
+            context=request.context,
+            model_name=request.model
+        )
+
+    # 创建 Message
+    message = session.create_message(request.message)
+    session.add_conversation_message("user", request.message)
+
+    # 获取对话历史
+    conversation_history = session.get_conversation_history()
+
+    # 使用 asyncio.Queue 实现真正的流式传输
+    thinking_queue: asyncio.Queue = asyncio.Queue()
+
+    async def event_stream():
+        """SSE 事件流生成器"""
+        # 1. 发送 session 信息
+        yield f"data: {json.dumps({'type': 'session', 'session_id': session.session_id, 'message_id': message.message_id})}\n\n"
+
+        # 2. 获取事件循环并启动线程
+        loop = asyncio.get_running_loop()
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+
+        def run_intent_in_thread():
+            """在线程中运行意图识别"""
+            intent_agent = IntentAgent(api_key)
+
+            def on_thinking_chunk(chunk: str):
+                # 线程安全地将内容放入队列
+                loop.call_soon_threadsafe(thinking_queue.put_nowait, ('thinking', chunk))
+
+            intent, _ = intent_agent.recognize_intent_streaming(
+                request.message,
+                conversation_history,
+                on_thinking_chunk
+            )
+            # 发送完成信号
+            loop.call_soon_threadsafe(thinking_queue.put_nowait, ('intent_done', intent))
+
+        # 提交到线程池
+        future = loop.run_in_executor(executor, run_intent_in_thread)
+
+        # 3. 从队列读取并流式输出
+        intent = None
+        while True:
+            try:
+                # 使用超时避免永久阻塞
+                event_type, data = await asyncio.wait_for(thinking_queue.get(), timeout=60.0)
+
+                if event_type == 'thinking':
+                    yield f"data: {json.dumps({'type': 'thinking', 'content': data})}\n\n"
+                elif event_type == 'intent_done':
+                    intent = data
+                    break
+            except asyncio.TimeoutError:
+                yield f"data: {json.dumps({'type': 'error', 'message': '意图识别超时'})}\n\n"
+                return
+
+        # 等待线程完成
+        await future
+        executor.shutdown(wait=False)
+
+        if not intent:
+            yield f"data: {json.dumps({'type': 'error', 'message': '意图识别失败'})}\n\n"
+            return
+
+        # 4. 发送意图结果
+        yield f"data: {json.dumps({'type': 'intent', 'intent': 'forecast' if intent.is_forecast else 'chat', 'is_forecast': intent.is_forecast, 'reason': intent.reason})}\n\n"
+
+        # 5. 保存意图到 Message
+        message.save_unified_intent(intent)
+
+        # 6. 处理超出范围的情况
+        if not intent.is_in_scope:
+            message.save_conclusion(intent.out_of_scope_reply or "抱歉，我是金融时序分析助手，暂不支持此类问题。")
+            message.update_step_detail(1, "completed", "超出服务范围")
+            message.mark_completed()
+            yield f"data: {json.dumps({'type': 'done', 'completed': True})}\n\n"
+            return
+
+        message.update_step_detail(1, "completed", f"意图: {'预测' if intent.is_forecast else '对话'}")
+
+        # 7. 启动后台任务处理剩余步骤
+        task_processor = get_task_processor(api_key)
+        background_tasks.add_task(
+            task_processor.execute_after_intent,
+            session.session_id,
+            message.message_id,
+            request.message,
+            intent
+        )
+
+        # 8. 发送完成信号
+        yield f"data: {json.dumps({'type': 'done', 'completed': False})}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
