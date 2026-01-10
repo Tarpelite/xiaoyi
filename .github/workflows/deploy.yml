@@ -45,11 +45,10 @@ jobs:
           HF_TOKEN=${{ secrets.HF_TOKEN }}
           HOST=0.0.0.0
           PORT=8000
-          QDRANT_HOST=qdrant
-          QDRANT_PORT=6333
           REDIS_HOST=redis
           REDIS_PORT=6379
           REDIS_DB=0
+          RAG_SERVICE_URL=http://{{ secrets.RAG_SERVICE_IP }}:8000
           EOF
           
           echo "📝 NEXT_PUBLIC_API_URL=http://${{ steps.ip.outputs.SERVER_IP }}:18000"
