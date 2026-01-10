@@ -15,8 +15,8 @@ _DEFAULT_PDF_DIR = os.path.join(_PROJECT_ROOT, "energy_reports_test")
 class RAGConfig(BaseModel):
     """RAG 系统配置"""
 
-    # Qdrant 配置
-    qdrant_host: str = "localhost"
+    # Qdrant 配置 (默认使用外部服务)
+    qdrant_host: str = "10.139.197.44"
     qdrant_port: int = 6333
     collection_name: str = "energy_reports"
 
@@ -39,7 +39,7 @@ class RAGConfig(BaseModel):
 def get_rag_config() -> RAGConfig:
     """获取 RAG 配置（支持环境变量覆盖）"""
     return RAGConfig(
-        qdrant_host=os.getenv("QDRANT_HOST", "localhost"),
+        qdrant_host=os.getenv("QDRANT_HOST", "10.139.197.44"),
         qdrant_port=int(os.getenv("QDRANT_PORT", "6333")),
         pdf_directory=os.getenv("RAG_PDF_DIRECTORY", _DEFAULT_PDF_DIR),
     )
