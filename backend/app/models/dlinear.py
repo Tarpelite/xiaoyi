@@ -13,7 +13,7 @@ from datetime import timedelta
 import pandas as pd
 import numpy as np
 from .base import BaseForecaster
-
+from app.utils.trading_calendar import get_trading_calendar
 
 class MovingAverage:
     """移动平均核用于趋势提取"""
@@ -169,7 +169,10 @@ class DLinearForecaster(BaseForecaster):
         value_window = values[-self.seq_len:].copy()
         
         for i in range(horizon):
-            future_date = last_date + timedelta(days=i + 1)
+            # 在for循环之前
+            trading_days = get_next_trading_days(last_date, horizon)
+            for i in range(horizon):
+                future_date = trading_days[i]
             
             # 分解当前窗口
             window_trend, window_seasonal = self.decomposition.forward(value_window)

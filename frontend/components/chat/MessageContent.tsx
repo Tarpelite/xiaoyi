@@ -248,6 +248,16 @@ function InteractiveChart({ content }: { content: ChartContent }) {
 
   const hasBacktestSupport = Boolean(sessionId && messageId && originalData && originalData.length >= 60)
 
+  // 周末过滤函数
+  const isWeekday = (dateStr: string): boolean => {
+    try {
+      const date = new Date(dateStr)
+      const day = date.getDay() // 0=Sunday, 6=Saturday
+      return day !== 0 && day !== 6 // 过滤掉周日和周六
+    } catch {
+      return true // 解析失败则保留
+    }
+  }
   // 转换数据格式为 Recharts 格式
   const chartData = useMemo(() => {
     // 如果在回测模式，使用回测数据
@@ -262,18 +272,20 @@ function InteractiveChart({ content }: { content: ChartContent }) {
 
       const sortedDates = Array.from(allDates).sort()
 
-      return sortedDates.map(date => {
-        const histPoint = history.find(p => p.date === date)
-        const truthPoint = groundTruth.find(p => p.date === date)
-        const predPoint = prediction.find(p => p.date === date)
+      return sortedDates
+        .filter(date => isWeekday(date))
+        .map(date => {
+          const histPoint = history.find(p => p.date === date)
+          const truthPoint = groundTruth.find(p => p.date === date)
+          const predPoint = prediction.find(p => p.date === date)
 
-        return {
-          name: date,
-          历史价格: histPoint?.value ?? null,
-          实际值: truthPoint?.value ?? null,
-          回测预测: predPoint?.value ?? null
-        }
-      })
+          return {
+            name: date,
+            历史价格: histPoint?.value ?? null,
+            实际值: truthPoint?.value ?? null,
+            回测预测: predPoint?.value ?? null
+          }
+        })
     }
 
     // 正常模式
@@ -283,7 +295,7 @@ function InteractiveChart({ content }: { content: ChartContent }) {
         item[dataset.label] = dataset.data[index]
       })
       return item
-    })
+    }).filter(item => isWeekday(item.name as string))
   }, [data, backtest.chartData])
 
   // 计算Y轴范围（自适应）- 基于所有数据，保持一致性
@@ -340,6 +352,7 @@ function InteractiveChart({ content }: { content: ChartContent }) {
 
   // 图表容器引用
   const chartContainerRef = useRef<HTMLDivElement>(null)
+  const [mouseY, setMouseY] = useState<number | null>(null) // 鼠标实际Y坐标（像素）
 
   // 计算当前显示的数据
   const displayData = useMemo(() => {
@@ -405,6 +418,7 @@ function InteractiveChart({ content }: { content: ChartContent }) {
       return
     }
 
+
     // 阻止默认滚动行为
     e.preventDefault()
     e.stopPropagation()
@@ -456,17 +470,29 @@ function InteractiveChart({ content }: { content: ChartContent }) {
     }
   }, [handleWheel])
 
-  // 添加全局鼠标事件监听
+  // 原生鼠标跟踪获取真实Y坐标
   useEffect(() => {
-    if (isDragging) {
-      window.addEventListener('mousemove', handleMouseMove)
-      window.addEventListener('mouseup', handleMouseUp)
-      return () => {
-        window.removeEventListener('mousemove', handleMouseMove)
-        window.removeEventListener('mouseup', handleMouseUp)
+    const container = chartContainerRef.current
+    if (!container) return
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const rect = container.getBoundingClientRect()
+      const y = e.clientY - rect.top
+      if (y >= 0 && y <= rect.height) {
+        setMouseY(y)
       }
     }
-  }, [isDragging, handleMouseMove, handleMouseUp])
+
+    const handleMouseLeave = () => setMouseY(null)
+
+    container.addEventListener('mousemove', handleMouseMove)
+    container.addEventListener('mouseleave', handleMouseLeave)
+
+    return () => {
+      container.removeEventListener('mousemove', handleMouseMove)
+      container.removeEventListener('mouseleave', handleMouseLeave)
+    }
+  }, [])
 
   // 重置视图
   const handleReset = useCallback(() => {
@@ -579,6 +605,32 @@ function InteractiveChart({ content }: { content: ChartContent }) {
             <Legend
               wrapperStyle={{ fontSize: '12px' }}
             />
+            {/* 鼠标跟随的水平参考线 */}
+            {mouseY !== null && chartContainerRef.current && (() => {
+              const rect = chartContainerRef.current!.getBoundingClientRect()
+              const chartHeight = rect.height  // 动态获取实际高度
+              const marginTop = 5
+              const marginBottom = 20
+              const effectiveHeight = chartHeight - marginTop - marginBottom
+
+              const adjustedY = mouseY - marginTop
+              const dataValue = yAxisDomain[1] - (adjustedY / effectiveHeight) * (yAxisDomain[1] - yAxisDomain[0])
+
+              return (
+                <ReferenceLine
+                  y={dataValue}
+                  stroke="#60a5fa"
+                  strokeWidth={1}
+                  strokeDasharray="3 3"
+                  label={{
+                    value: dataValue.toFixed(2),
+                    position: 'right',
+                    fill: '#60a5fa',
+                    fontSize: 10
+                  }}
+                />
+              )
+            })()}
             {/* 回测模式：3条线 */}
             {backtest.chartData ? (
               <>
@@ -636,6 +688,59 @@ function InteractiveChart({ content }: { content: ChartContent }) {
           </LineChart>
         </ResponsiveContainer>
       </div>
+
+      {/* 滑块式分割点选择器 */}
+      {hasBacktestSupport && originalData && originalData.length > 60 && (
+        <div className="mt-4 px-2">
+          <div className="relative">
+            <div className="relative h-3 rounded-full overflow-hidden bg-gradient-to-r from-purple-900/30 via-purple-600/20 to-orange-600/20 border border-purple-500/30">
+              <input
+                type="range"
+                min={60}
+                max={originalData.length - 1}
+                value={backtest.splitDate && originalData ? originalData.findIndex(p => p.date === backtest.splitDate) : 60}
+                onChange={(e) => {
+                  const newIndex = parseInt(e.target.value)
+                  if (newIndex >= 60 && originalData) {
+                    backtest.triggerBacktest(originalData[newIndex].date)
+                  }
+                }}
+                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+              />
+              <div
+                className="absolute inset-0 bg-gradient-to-r from-purple-500 to-orange-500 transition-all duration-200"
+                style={{
+                  width: backtest.splitDate && originalData
+                    ? `${((originalData.findIndex(p => p.date === backtest.splitDate) - 60) / (originalData.length - 61)) * 100}%`
+                    : '0%'
+                }}
+              />
+              {backtest.splitDate && originalData && (
+                <div
+                  className="absolute top-0 transform -translate-x-1/2 transition-all duration-200"
+                  style={{
+                    left: `${((originalData.findIndex(p => p.date === backtest.splitDate) - 60) / (originalData.length - 61)) * 100}%`
+                  }}
+                >
+                  <div className="absolute -top-6 left-1/2 transform -translate-x-1/2 flex flex-col items-center">
+                    <div className="text-orange-400 text-xl font-bold">▼</div>
+                    <div className="h-3 w-0.5 bg-orange-400"></div>
+                  </div>
+                  <div className="w-4 h-full bg-orange-500 shadow-lg shadow-orange-500/50"></div>
+                </div>
+              )}
+            </div>
+            <div className="flex justify-between text-xs text-gray-500 mt-2">
+              <span className="text-purple-400">起: {originalData[60]?.date}</span>
+              {backtest.splitDate && (
+                <span className="text-orange-400 font-bold">⬇ {backtest.splitDate}</span>
+              )}
+              <span className="text-gray-500">末: {originalData[originalData.length - 1]?.date}</span>
+            </div>
+          </div>
+        </div>
+      )}
+
       {isZoomed && (
         <div className="mt-2 text-xs text-gray-500 text-center">
           当前视图：{chartData[viewStartIndex]?.name} 至 {chartData[viewEndIndex]?.name}

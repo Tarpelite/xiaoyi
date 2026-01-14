@@ -10,7 +10,7 @@ import pandas as pd
 import numpy as np
 from .base import BaseForecaster
 from prophet import Prophet
-
+from app.utils.trading_calendar import get_trading_calendar
 class ProphetForecaster(BaseForecaster):
     """Prophet 时序预测器"""
 
@@ -50,21 +50,24 @@ class ProphetForecaster(BaseForecaster):
         # 训练模型
         model.fit(df[["ds", "y"]])
 
-        # 生成未来时间点
-        future = model.make_future_dataframe(periods=horizon, freq="D")
+        # 生成未来时间点（多生成以确保有足够交易日）
+        future = model.make_future_dataframe(periods=horizon * 2, freq="D")
         forecast = model.predict(future)
-
-        # 提取预测结果
-        pred = forecast.tail(horizon)
-        forecast_values = [
-            {
-                "date": row["ds"].strftime("%Y-%m-%d"),
-                "value": round(row["yhat"], 2),
-                "lower": round(row["yhat_lower"], 2),
-                "upper": round(row["yhat_upper"], 2),
-            }
-            for _, row in pred.iterrows()
-        ]
+        # 获取交易日历并过滤
+        trading_calendar = get_trading_calendar()
+        pred = forecast.tail(horizon * 2)
+        forecast_values=[]
+        for _, row in pred.iterrows():
+            date_str = row["ds"].strftime("%Y-%m-%d")
+            if not trading_calendar or date_str in trading_calendar:
+                forecast_values.append({
+                    "date": date_str,
+                    "value": round(row["yhat"], 2),
+                    "lower": round(row["yhat_lower"], 2),
+                    "upper": round(row["yhat_upper"], 2),
+                })
+                if len(forecast_values) >= horizon:
+                    break
 
         # 计算训练集 MAE
         train_pred = forecast.head(len(df))
