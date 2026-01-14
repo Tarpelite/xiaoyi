@@ -508,11 +508,8 @@ function InteractiveChart({ content }: { content: ChartContent }) {
       {/* 回测控制UI */}
       {hasBacktestSupport && (
         <BacktestControls
-          originalData={originalData || []}
-          splitDate={backtest.splitDate}
           isLoading={backtest.isLoading}
           mae={backtest.metrics?.mae ?? null}
-          onSplitChange={backtest.triggerBacktest}
           onReset={backtest.resetBacktest}
         />
       )}
