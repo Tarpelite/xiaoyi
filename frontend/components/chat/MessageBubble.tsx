@@ -10,6 +10,7 @@ import { ThinkingSection } from './ThinkingSection'
 
 interface MessageBubbleProps {
   message: Message
+  onRegenerateMessage?: () => void
 }
 
 // 情绪仪表盘组件
@@ -17,7 +18,7 @@ function EmotionGauge({ emotion, description }: { emotion: number; description: 
   // 将情绪值从 [-1, 1] 映射到角度 [180, 0]（从左侧到右侧）
   const angle = 180 - (emotion + 1) * 90 // -1 -> 180度, 0 -> 90度, 1 -> 0度
   const rotation = angle
-  
+
   const getEmotionColor = (score: number) => {
     if (score > 0.3) return 'text-green-400'
     if (score < -0.3) return 'text-red-400'
@@ -34,9 +35,9 @@ function EmotionGauge({ emotion, description }: { emotion: number; description: 
     <div className="space-y-3">
       {/* 仪表盘容器 */}
       <div className="relative w-full" style={{ height: '120px' }}>
-        <svg 
-          className="w-full h-full" 
-          viewBox="0 0 240 120" 
+        <svg
+          className="w-full h-full"
+          viewBox="0 0 240 120"
           preserveAspectRatio="xMidYMid meet"
         >
           <defs>
@@ -60,50 +61,50 @@ function EmotionGauge({ emotion, description }: { emotion: number; description: 
           </defs>
 
           {/* 背景轨道（完整半圆） */}
-          <path 
-            d="M 30 100 A 90 90 0 0 1 210 100" 
-            fill="none" 
-            stroke="#2a2a38" 
-            strokeWidth="16" 
+          <path
+            d="M 30 100 A 90 90 0 0 1 210 100"
+            fill="none"
+            stroke="#2a2a38"
+            strokeWidth="16"
             strokeLinecap="round"
           />
-          
+
           {/* 左侧红色区域（看跌：180度到90度） */}
-          <path 
-            d="M 30 100 A 90 90 0 0 1 120 20" 
-            fill="none" 
-            stroke="url(#gaugeRed)" 
-            strokeWidth="16" 
+          <path
+            d="M 30 100 A 90 90 0 0 1 120 20"
+            fill="none"
+            stroke="url(#gaugeRed)"
+            strokeWidth="16"
             strokeLinecap="round"
             opacity="0.6"
           />
-          
+
           {/* 右侧绿色区域（看涨：90度到0度） */}
-          <path 
-            d="M 120 20 A 90 90 0 0 1 210 100" 
-            fill="none" 
-            stroke="url(#gaugeGreen)" 
-            strokeWidth="16" 
+          <path
+            d="M 120 20 A 90 90 0 0 1 210 100"
+            fill="none"
+            stroke="url(#gaugeGreen)"
+            strokeWidth="16"
             strokeLinecap="round"
             opacity="0.6"
           />
 
           {/* 指针 */}
           <g transform={`rotate(${rotation} 120 100)`}>
-            <line 
-              x1="120" 
-              y1="100" 
-              x2="120" 
-              y2="30" 
-              stroke="#e5e7eb" 
-              strokeWidth="3" 
+            <line
+              x1="120"
+              y1="100"
+              x2="120"
+              y2="30"
+              stroke="#e5e7eb"
+              strokeWidth="3"
               strokeLinecap="round"
               className="transition-transform duration-1000 ease-out"
             />
-            <circle 
-              cx="120" 
-              cy="100" 
-              r="6" 
+            <circle
+              cx="120"
+              cy="100"
+              r="6"
               fill="#e5e7eb"
               className="transition-transform duration-1000 ease-out"
             />
@@ -173,7 +174,7 @@ function IntentBadge({ intentInfo }: { intentInfo: IntentInfo }) {
   )
 }
 
-export function MessageBubble({ message }: MessageBubbleProps) {
+export function MessageBubble({ message, onRegenerateMessage }: MessageBubbleProps) {
   const isUser = message.role === 'user'
 
   // 兼容旧版text字段
@@ -462,15 +463,69 @@ export function MessageBubble({ message }: MessageBubbleProps) {
         )}>
           <span className="text-[10px] text-gray-600">{message.timestamp}</span>
 
-          {/* AI 消息的操作按钮 */}
-          {!isUser && (
-            <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-              <ActionButton icon={<Copy className="w-3 h-3" />} title="复制" />
-              <ActionButton icon={<ThumbsUp className="w-3 h-3" />} title="有帮助" />
-              <ActionButton icon={<ThumbsDown className="w-3 h-3" />} title="没帮助" />
-              <ActionButton icon={<RotateCcw className="w-3 h-3" />} title="重新生成" />
-            </div>
-          )}
+          {/* AI 消息的操作按钮 - 只在消息完成后显示 */}
+          {!isUser && (() => {
+            // 判断消息是否完成
+            const isMessageComplete = message.renderMode !== 'thinking' && (
+              // chat模式：有内容即完成
+              message.renderMode === 'chat' ||
+              // forecast模式：所有步骤完成
+              !message.steps || message.steps.every(s => s.status === 'completed' || s.status === 'failed')
+            )
+
+            if (!isMessageComplete) return null
+
+            // 提取可复制的内容
+            const getCopyContent = () => {
+              const contents = message.contents || (message.content ? [message.content] : [])
+
+              // 对于forecast模式，复制综合分析报告（最后一个非情绪的文本）
+              if (message.renderMode === 'forecast') {
+                const reportText = contents
+                  .filter(c => c.type === 'text' && !c.text.startsWith('__EMOTION_MARKER__'))
+                  .pop()
+                if (reportText && reportText.type === 'text') {
+                  return reportText.text
+                }
+              }
+
+              // 对于chat模式，复制所有文本内容
+              return contents
+                .filter(c => c.type === 'text')
+                .map(c => c.type === 'text' ? c.text : '')
+                .join('\n\n')
+            }
+
+            const handleCopy = async () => {
+              const textToCopy = getCopyContent()
+              if (textToCopy) {
+                try {
+                  await navigator.clipboard.writeText(textToCopy)
+                  // TODO: 可以添加toast提示
+                  console.log('已复制到剪贴板')
+                } catch (err) {
+                  console.error('复制失败:', err)
+                }
+              }
+            }
+
+            return (
+              <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                <ActionButton
+                  icon={<Copy className="w-3 h-3" />}
+                  title="复制"
+                  onClick={handleCopy}
+                />
+                <ActionButton icon={<ThumbsUp className="w-3 h-3" />} title="有帮助" />
+                <ActionButton icon={<ThumbsDown className="w-3 h-3" />} title="没帮助" />
+                <ActionButton
+                  icon={<RotateCcw className="w-3 h-3" />}
+                  title="重新生成"
+                  onClick={onRegenerateMessage}
+                />
+              </div>
+            )
+          })()}
         </div>
       </div>
 
@@ -485,11 +540,16 @@ export function MessageBubble({ message }: MessageBubbleProps) {
 }
 
 // 操作按钮组件
-function ActionButton({ icon, title }: { icon: React.ReactNode; title: string }) {
+function ActionButton({ icon, title, onClick }: {
+  icon: React.ReactNode
+  title: string
+  onClick?: () => void
+}) {
   return (
     <button
       className="p-1 hover:bg-dark-600 rounded transition-colors text-gray-500 hover:text-gray-300"
       title={title}
+      onClick={onClick}
     >
       {icon}
     </button>

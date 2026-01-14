@@ -84,6 +84,7 @@ async def create_analysis_task(
         raise HTTPException(status_code=500, detail=str(e))
 
     # 获取或创建 Session
+    is_new_session = False
     if request.session_id and Session.exists(request.session_id):
         # 复用已有 session
         session = Session(request.session_id)
@@ -93,9 +94,14 @@ async def create_analysis_task(
             context=request.context,
             model_name=request.model
         )
+        is_new_session = True
 
     # 为本次查询创建新 Message
     message = session.create_message(request.message)
+
+    # 如果是新会话的第一条消息，自动生成标题
+    if is_new_session:
+        session.auto_generate_title(request.message)
 
     # 添加用户消息到对话历史
     session.add_conversation_message("user", request.message)
@@ -302,6 +308,7 @@ async def stream_analysis(
         return StreamingResponse(error_stream(), media_type="text/event-stream")
 
     # 获取或创建 Session
+    is_new_session = False
     if request.session_id and Session.exists(request.session_id):
         session = Session(request.session_id)
     else:
@@ -309,9 +316,15 @@ async def stream_analysis(
             context=request.context,
             model_name=request.model
         )
+        is_new_session = True
 
     # 创建 Message
     message = session.create_message(request.message)
+    
+    # 如果是新会话的第一条消息，自动生成标题
+    if is_new_session:
+        session.auto_generate_title(request.message)
+    
     session.add_conversation_message("user", request.message)
 
     # 获取对话历史
