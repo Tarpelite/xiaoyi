@@ -13,6 +13,7 @@
 
 import asyncio
 import json
+import os
 import concurrent.futures
 from typing import Optional
 
@@ -26,7 +27,9 @@ from app.core.unified_tasks import get_task_processor
 from app.schemas.session_schema import (
     CreateAnalysisRequest,
     AnalysisStatusResponse,
-    SessionStatus
+    SessionStatus,
+    BacktestRequest,
+    BacktestResponse
 )
 from app.agents import SuggestionAgent, IntentAgent
 
@@ -399,3 +402,159 @@ async def stream_analysis(
         yield f"data: {json.dumps({'type': 'done', 'completed': False})}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+    return {"suggestions": suggestions}
+
+
+@router.post("/backtest")
+async def backtest_prediction(request: "BacktestRequest"):
+    """
+    交互式时间旅行回测端点
+    
+    基于历史分割点重新预测，计算预测误差指标(MAE/RMSE/MAPE)
+    
+    Args:
+        request: BacktestRequest
+            - session_id: 会话ID
+            - message_id: 消息ID  
+            - split_date: 分割点日期 (YYYY-MM-DD)
+            - forecast_horizon: 可选，预测天数
+    
+    Returns:
+        BacktestResponse:
+            - metrics: 误差指标
+            - backtest_data: 回测预测结果
+            - ground_truth: 实际历史数据
+    """
+    from app.schemas.session_schema import BacktestMetrics, TimeSeriesPoint
+    import time
+    import pandas as pd
+    import math
+    
+    start_time = time.time()
+    
+    # 1. 验证会话和消息
+    if not Session.exists(request.session_id):
+        raise HTTPException(404, "会话不存在")
+    
+    message = Message(request.message_id, request.session_id)
+    data = message.get()
+    
+    if not data:
+        raise HTTPException(404, "消息不存在")
+    
+    if not data.is_forecast or not data.time_series_original:
+        raise HTTPException(400, "该消息不包含预测数据")
+    
+    original_data = data.time_series_original
+
+    # 2. 找到分割点索引
+    split_index = -1
+    for i, point in enumerate(original_data):
+        if point.date >= request.split_date:
+            split_index = i
+            break
+
+    if split_index < 0:
+        raise HTTPException(400, f"分割日期 {request.split_date} 不在数据范围内")
+    
+    # 确保有足够的训练数据（至少60个点）
+    if split_index < 60:
+        raise HTTPException(400, f"分割点过早，训练数据不足（需要至少60个点，当前{split_index}个）")
+    
+    train_points = original_data[:split_index]
+    ground_truth_points = original_data[split_index:]
+    
+    # 4. 计算horizon: max(90天, ground_truth长度)
+    # 这样即使ground_truth较短，也会显示完整的90天预测
+    horizon = max(90, len(ground_truth_points))
+    
+    # 获取API key
+    api_key = os.getenv("DEEPSEEK_API_KEY")
+    if not api_key:
+        raise HTTPException(500, "API key not configured")
+    
+    # 4. 重新预测（复用现有预测逻辑）
+    try:
+        # Use the api_key obtained from os.getenv, or fall back to settings.api_key if preferred
+        # For now, keeping the user's provided api_key logic.
+        pass 
+    except ValueError as e:
+        raise HTTPException(500, str(e))
+    
+    task_processor = get_task_processor(api_key)
+    
+    # 转换为DataFrame
+    df = pd.DataFrame({
+        "ds": pd.to_datetime([p.date for p in train_points]),
+        "y": [p.value for p in train_points]
+    })
+    
+    # 运行预测
+    model_to_use = data.model_name if hasattr(data, 'model_name') and data.model_name else "prophet"
+    forecast_result = await task_processor._run_forecast(
+        df,
+        model_to_use,
+        horizon,
+        {}  # Prophet参数
+    )
+    
+    # 提取预测结果
+    backtest_points = [
+        TimeSeriesPoint(
+            date=item["date"],
+            value=item["value"],
+            is_prediction=True
+        )
+        for item in forecast_result["forecast"]
+    ]
+    
+    # 对齐日期（确保预测和ground truth长度一致）
+    backtest_aligned = {}
+    for p in backtest_points:
+        backtest_aligned[p.date] = p.value
+    
+    ground_truth_aligned = {}
+    for p in ground_truth_points:
+        ground_truth_aligned[p.date] = p.value
+    
+    common_dates = set(backtest_aligned.keys()) & set(ground_truth_aligned.keys())
+    
+    if not common_dates:
+        raise HTTPException(500, "预测数据与ground truth无重叠日期")
+    
+    # 5. 计算误差指标
+    errors = []
+    abs_percentage_errors = []
+    
+    for date in sorted(common_dates):
+        pred = backtest_aligned[date]
+        actual = ground_truth_aligned[date]
+        error = actual - pred
+        errors.append(error)
+        
+        if actual != 0:
+            abs_percentage_errors.append(abs(error / actual) * 100)
+    
+    mae = sum(abs(e) for e in errors) / len(errors)
+    rmse = math.sqrt(sum(e**2 for e in errors) / len(errors))
+    mae = sum(abs(e) for e in errors) / len(errors) if errors else 0.0
+    rmse = math.sqrt(sum(e**2 for e in errors) / len(errors)) if errors else 0.0
+    mape = sum(abs_percentage_errors) / len(abs_percentage_errors) if abs_percentage_errors else 0
+    
+    calculation_time_ms = int((time.time() - start_time) * 1000)
+    
+    # 6. 构建响应
+    # 返回所有预测点（即使超过ground_truth）
+    # 但metrics只基于有ground_truth的日期计算
+    return BacktestResponse(
+        metrics=BacktestMetrics(
+            mae=round(mae, 4) if common_dates else 0.0,
+            rmse=round(rmse, 4) if common_dates else 0.0,
+            mape=round(mape, 2) if common_dates else 0.0,
+            calculation_time_ms=calculation_time_ms
+        ),
+        backtest_data=backtest_points,  # 返回所有预测点
+        ground_truth=ground_truth_points,  # 返回所有ground_truth（可能比预测短）
+        split_date=request.split_date,
+        split_index=split_index
+    )

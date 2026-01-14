@@ -41,6 +41,10 @@ export interface ChartContent {
     }[]
   }
   chartType?: 'line' | 'bar' | 'area'
+  // 回测功能字段
+  sessionId?: string
+  messageId?: string
+  originalData?: Array<{ date: string; value: number; is_prediction: boolean }>
 }
 
 // 表格内容
@@ -346,6 +350,8 @@ export function ChatArea() {
       conclusion?: string
       is_time_series?: boolean
       conversational_response?: string
+      session_id?: string
+      message_id?: string
     },
     currentStep: number = 0,
     status: string = 'pending'
@@ -463,7 +469,11 @@ export function ChatArea() {
                 color: '#06b6d4'
               }
             ]
-          }
+          },
+          // 回测功能字段
+          sessionId: data.session_id,
+          messageId: data.message_id,
+          originalData: data.time_series_original
         })
       } else {
         // 步骤2-5：只显示历史价格
@@ -482,7 +492,11 @@ export function ChatArea() {
                 color: '#8b5cf6'
               }
             ]
-          }
+          },
+          // 回测功能字段
+          sessionId: data.session_id,
+          messageId: data.message_id,
+          originalData: data.time_series_original
         })
       }
     }

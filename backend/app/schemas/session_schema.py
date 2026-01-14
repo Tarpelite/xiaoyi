@@ -266,3 +266,41 @@ class NewsSummaryResult(BaseModel):
     news_items: List[SummarizedNewsItem]
     total_before_dedup: int
     total_after_dedup: int
+
+
+# ========== Backtest API Models ==========
+
+class BacktestRequest(BaseModel):
+    """
+    回测请求模型
+    
+    用于交互式时间旅行回测功能
+    """
+    session_id: str = Field(description="会话ID")
+    message_id: str = Field(description="消息ID")
+    split_date: str = Field(description="分割点日期 (ISO格式: YYYY-MM-DD)")
+    forecast_horizon: Optional[int] = Field(default=None, description="预测天数（可选，默认预测到原始数据末尾）")
+
+
+class BacktestMetrics(BaseModel):
+    """回测指标"""
+    mae: float = Field(description="平均绝对误差 (Mean Absolute Error)")
+    rmse: float = Field(description="均方根误差 (Root Mean Squared Error)")
+    mape: float = Field(description="平均绝对百分比误差 (Mean Absolute Percentage Error)")
+    calculation_time_ms: int = Field(description="计算耗时（毫秒）")
+
+
+class BacktestResponse(BaseModel):
+    """
+    回测响应模型
+    
+    Returns:
+        metrics: 预测误差指标
+        backtest_data: 回测预测结果
+        ground_truth: 实际历史数据（用于对比）
+    """
+    metrics: BacktestMetrics
+    backtest_data: List[TimeSeriesPoint] = Field(description="回测预测结果")
+    ground_truth: List[TimeSeriesPoint] = Field(description="实际历史数据")
+    split_date: str = Field(description="分割点日期")
+    split_index: int = Field(description="分割点索引")

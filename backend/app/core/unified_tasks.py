@@ -435,10 +435,17 @@ class UnifiedTaskProcessorV3:
         )
 
         # 运行预测
+        # 计算预测天数: 预测到 max(最后数据日期 + 3个月, 今天)
+        last_date = df['ds'].max().to_pydatetime()
+        target_date_from_start = last_date + timedelta(days=90)  # 最后一天 + 3个月
+        target_date_to_today = datetime.now()
+        target_date = max(target_date_from_start, target_date_to_today)
+        forecast_horizon = (target_date - last_date).days
+        
         forecast_result = await self._run_forecast(
             df,
             intent.forecast_model,
-            intent.forecast_horizon,
+            max(forecast_horizon, 1),  # 至少预测1天
             prophet_params
         )
 
@@ -449,6 +456,12 @@ class UnifiedTaskProcessorV3:
 
         metrics_info = ", ".join([f"{k.upper()}: {v}" for k, v in forecast_result.get('metrics', {}).items()])
         message.update_step_detail(5, "completed", f"预测完成 ({metrics_info})")
+        
+        # 保存使用的模型名称到session
+        session_data = session.get()
+        if session_data:
+            session_data.model_name = intent.forecast_model
+            session._save(session_data)
 
         # === 阶段 5: 报告生成 ===
         message.update_step_detail(6, "running", "生成分析报告...")

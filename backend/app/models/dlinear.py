@@ -13,7 +13,7 @@ from datetime import timedelta
 import pandas as pd
 import numpy as np
 from .base import BaseForecaster
-
+from app.utils.trading_calendar import get_trading_calendar
 
 class MovingAverage:
     """移动平均核用于趋势提取"""
@@ -144,6 +144,7 @@ class DLinearForecaster(BaseForecaster):
             raise ValueError(f"DLinear 需要至少 {min_required} 条历史数据，当前只有 {len(df)} 条")
         
         values = df["y"].values
+        
         trend, seasonal = self.decomposition.forward(values)
         X_trend, y_trend = self._create_sequences(trend, self.seq_len)
         X_seasonal, y_seasonal = self._create_sequences(seasonal, self.seq_len)
@@ -160,16 +161,27 @@ class DLinearForecaster(BaseForecaster):
         residuals = (y_trend.flatten() + y_seasonal.flatten()) - (train_pred_trend + train_pred_seasonal)
         std_error = np.std(residuals)
         
-        # 递归预测
+        # 递归预测 - 使用原始值窗口
         forecast_values = []
         last_date = df["ds"].iloc[-1]
-        trend_window = trend[-self.seq_len:].copy()
-        seasonal_window = seasonal[-self.seq_len:].copy()
+        
+        # 初始化窗口为最后seq_len个原始值
+        value_window = values[-self.seq_len:].copy()
         
         for i in range(horizon):
-            future_date = last_date + timedelta(days=i + 1)
-            trend_pred = float(self.trend_layer.predict(trend_window).item())
-            seasonal_pred = float(self.seasonal_layer.predict(seasonal_window).item())
+            # 在for循环之前
+            trading_days = get_next_trading_days(last_date, horizon)
+            for i in range(horizon):
+                future_date = trading_days[i]
+            
+            # 分解当前窗口
+            window_trend, window_seasonal = self.decomposition.forward(value_window)
+            
+            # 使用最后seq_len个trend/seasonal进行预测
+            trend_pred = float(self.trend_layer.predict(window_trend).item())
+            seasonal_pred = float(self.seasonal_layer.predict(window_seasonal).item())
+            
+            # 组合得到原始值预测
             pred_value = trend_pred + seasonal_pred
             
             forecast_values.append({
@@ -179,8 +191,8 @@ class DLinearForecaster(BaseForecaster):
                 "upper": round(pred_value + 1.96 * std_error, 2),
             })
             
-            trend_window = np.append(trend_window[1:], trend_pred)
-            seasonal_window = np.append(seasonal_window[1:], seasonal_pred)
+            # 更新窗口：移除最旧值，添加新预测值
+            value_window = np.append(value_window[1:], pred_value)
         
         mae = np.mean(np.abs(residuals))
         rmse = np.sqrt(np.mean(residuals ** 2))
