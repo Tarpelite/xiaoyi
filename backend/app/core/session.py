@@ -9,7 +9,6 @@ Session 管理模块
 - Message: 一轮 QA (存储所有分析结果数据)
 """
 
-import json
 import uuid
 from datetime import datetime
 from typing import Optional, List, Dict
@@ -48,7 +47,7 @@ class Message:
         self.ttl = 86400  # 24小时过期
 
     @classmethod
-    def create(cls, session_id: str, user_query: str, model_name: str = "prophet") -> "Message":
+    def create(cls, session_id: str, user_query: str) -> "Message":
         """创建新消息"""
         message_id = str(uuid.uuid4())
         message = cls(message_id, session_id)
@@ -58,7 +57,6 @@ class Message:
             message_id=message_id,
             session_id=session_id,
             user_query=user_query,
-            model_name=model_name,
             status=SessionStatus.PENDING,
             created_at=now,
             updated_at=now
@@ -99,7 +97,6 @@ class Message:
         data = self.get()
         if data:
             data.unified_intent = intent
-            data.is_forecast = intent.is_forecast
 
             # 设置 intent 字段
             if not intent.is_in_scope:
@@ -131,8 +128,6 @@ class Message:
         data = self.get()
         if data:
             data.stock_match = result
-            if result.success and result.stock_info:
-                data.stock_code = result.stock_info.stock_code
             self._save(data)
             print(f"[Message] Stock match: {result.success}")
 
@@ -248,7 +243,7 @@ class Session:
         self.ttl = 86400  # 24小时过期
 
     @classmethod
-    def create(cls, context: str = "", model_name: str = "prophet") -> "Session":
+    def create(cls, context: str = "") -> "Session":
         """创建新会话"""
         session_id = str(uuid.uuid4())
         session = cls(session_id)
@@ -257,7 +252,6 @@ class Session:
         initial_data = SessionData(
             session_id=session_id,
             context=context,
-            model_name=model_name,
             created_at=now,
             updated_at=now
         )
@@ -307,8 +301,7 @@ class Session:
         # 创建消息
         message = Message.create(
             session_id=self.session_id,
-            user_query=user_query,
-            model_name=data.model_name
+            user_query=user_query
         )
 
         # 添加到 session

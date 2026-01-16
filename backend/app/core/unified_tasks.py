@@ -16,18 +16,15 @@
 
 import asyncio
 from datetime import datetime, timedelta
-from typing import Optional, List, Dict, Any
+from typing import Optional, List
 
 from app.core.session import Session, Message
 from app.core.config import settings
 from app.schemas.session_schema import (
-    SessionStatus,
-    StepStatus,
     TimeSeriesPoint,
     UnifiedIntent,
     ResolvedKeywords,
     StockMatchResult,
-    StockInfo,
     SummarizedNewsItem,
     ReportItem,
     RAGSource,
@@ -414,9 +411,22 @@ class UnifiedTaskProcessorV3:
 
         # 保存情绪
         if emotion_result:
+            # 从 raw 中获取 LLM 生成的描述
+            raw = emotion_result.get("raw", {})
+            # 优先使用 analysis_text，其次从 formatted_text 提取，最后降级到 sentiment
+            llm_description = raw.get("analysis_text") or ""
+            if not llm_description and raw.get("formatted_text"):
+                # 从 formatted_text 提取纯文本（去除 markdown 格式）
+                formatted = raw.get("formatted_text", "")
+                if "**分析说明:**" in formatted:
+                    llm_description = formatted.split("**分析说明:**")[-1].strip()[:100]
+                else:
+                    llm_description = formatted[:100]
+            description = llm_description or emotion_result.get("description", "中性")
+
             message.save_emotion(
                 emotion_result.get("score", 0),
-                emotion_result.get("description", "中性")
+                description
             )
 
         message.update_step_detail(
@@ -905,13 +915,6 @@ class UnifiedTaskProcessorV3:
         except Exception as e:
             print(f"[Domain] 获取新闻失败: {e}")
             return []
-
-
-# ========== 兼容旧版 ==========
-
-class UnifiedTaskProcessor(UnifiedTaskProcessorV3):
-    """兼容旧版名称"""
-    pass
 
 
 # 单例获取
