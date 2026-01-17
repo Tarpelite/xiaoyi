@@ -52,6 +52,7 @@ async def subscribe_to_message(message_id: str, session_id: str):
             
             # ===== A. 历史回放 =====
             buffer = state_manager.get_full_buffer(message_id)
+            print(f"[SSE Subscribe] Buffer contains: thinking={len(buffer.get('thinking', ''))} chars, intent={bool(buffer.get('intent'))}")
             
             # 回放thinking
             if buffer.get("thinking"):
@@ -59,6 +60,7 @@ async def subscribe_to_message(message_id: str, session_id: str):
                     "chunk": "",
                     "accumulated": buffer["thinking"]
                 })
+                print(f"[SSE Subscribe] Replaying thinking: {len(buffer['thinking'])} chars")
                 yield f"event: thinking_chunk\ndata: {event_data}\n\n"
                 
                 complete_data = json.dumps({

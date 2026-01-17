@@ -119,6 +119,7 @@ async def llm_generation_worker(
             "thinking": full_thinking,
             "intent": intent.model_dump()
         })
+        print(f"[Worker] Buffer updated with thinking ({len(full_thinking)} chars) and intent")
         
         # 发布thinking完成事件
         await pubsub.publish(channel, {

@@ -13,12 +13,12 @@ Redis Pub/Sub Manager for SSE Streaming
 import json
 import asyncio
 from typing import AsyncIterator, Dict, Any, Optional
-from redis.asyncio import Redis
+from redis import Redis
 from app.core.redis_client import get_redis
 
 
 class RedisPubSubManager:
-    """Redis Pub/Sub管理器"""
+    """Redis Pub/Sub管理器 - 使用同步Redis客户端"""
     
     def __init__(self, redis_client: Optional[Redis] = None):
         """
@@ -54,39 +54,34 @@ class RedisPubSubManager:
             
         Yields:
             解析后的消息字典
-            
-        Example:
-            async for message in manager.subscribe("channel:msg123"):
-                if message['type'] == 'complete':
-                    break
-                print(message)
         """
         # 创建新的pubsub实例
         self.pubsub = self.redis.pubsub()
         
         try:
             # 订阅频道
-            await self.pubsub.subscribe(channel)
+            self.pubsub.subscribe(channel)
             print(f"[PubSub] Subscribed to channel: {channel}")
             
-            # 监听消息
-            async for redis_message in self.pubsub.listen():
-                # 跳过订阅确认消息
-                if redis_message['type'] != 'message':
-                    continue
+            # 使用get_message()循环（兼容性最好）
+            while True:
+                message = self.pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
                 
-                # 解析消息
-                try:
-                    data = redis_message['data']
-                    if isinstance(data, bytes):
-                        data = data.decode('utf-8')
-                    
-                    message = json.loads(data)
-                    yield message
-                    
-                except (json.JSONDecodeError, UnicodeDecodeError) as e:
-                    print(f"[PubSub] Error decoding message: {e}")
-                    continue
+                if message and message.get('type') == 'message':
+                    try:
+                        data = message['data']
+                        if isinstance(data, bytes):
+                            data = data.decode('utf-8')
+                        
+                        parsed_message = json.loads(data)
+                        yield parsed_message
+                        
+                    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                        print(f"[PubSub] Error decoding message: {e}")
+                        continue
+                
+                # 让出控制权给事件循环
+                await asyncio.sleep(0.01)
                     
         finally:
             # 清理订阅
@@ -96,8 +91,8 @@ class RedisPubSubManager:
         """关闭Pub/Sub连接"""
         if self.pubsub:
             try:
-                await self.pubsub.unsubscribe()
-                await self.pubsub.aclose()  # Fixed: use aclose() for async redis
+                self.pubsub.unsubscribe()
+                self.pubsub.close()
                 print("[PubSub] Connection closed")
             except Exception as e:
                 print(f"[PubSub] Error closing connection: {e}")
