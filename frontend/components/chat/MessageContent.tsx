@@ -382,6 +382,10 @@ function InteractiveChart({ content }: { content: ChartContent }) {
   const chartContainerRef = useRef<HTMLDivElement>(null)
   const [mouseY, setMouseY] = useState<number | null>(null) // 鼠标相对于绘图区域的Y坐标（像素）
   const [plotAreaBounds, setPlotAreaBounds] = useState<{ top: number; height: number } | null>(null) // 绘图区域边界
+  
+  // 滑块拖拽状态
+  const [isDraggingSlider, setIsDraggingSlider] = useState(false)
+  const [tempSplitDate, setTempSplitDate] = useState<string | null>(null) // 拖拽时的临时分割日期
 
   // 计算当前显示的数据
   const displayData = useMemo(() => {
@@ -432,6 +436,20 @@ function InteractiveChart({ content }: { content: ChartContent }) {
   const handleMouseUp = useCallback(() => {
     setIsDragging(false)
   }, [])
+
+  // 绑定拖拽相关的全局鼠标事件
+  useEffect(() => {
+    if (isDragging) {
+      // 拖拽时绑定到 window，确保鼠标移出容器外也能继续拖拽
+      window.addEventListener('mousemove', handleMouseMove)
+      window.addEventListener('mouseup', handleMouseUp)
+      
+      return () => {
+        window.removeEventListener('mousemove', handleMouseMove)
+        window.removeEventListener('mouseup', handleMouseUp)
+      }
+    }
+  }, [isDragging, handleMouseMove, handleMouseUp])
 
   // 滚轮缩放处理函数
   const handleWheel = useCallback((e: WheelEvent) => {
@@ -726,6 +744,26 @@ function InteractiveChart({ content }: { content: ChartContent }) {
                 />
               )
             })()}
+            {/* 回测分割线 - 垂直参考线 */}
+            {((hasBacktestSupport && backtest.splitDate) || (isDraggingSlider && tempSplitDate)) && (() => {
+              // 拖拽时使用临时日期，否则使用回测分割日期
+              const splitDate = (isDraggingSlider && tempSplitDate) ? tempSplitDate : backtest.splitDate
+              if (!splitDate) return null
+              
+              // 检查分割日期是否在当前显示的数据中
+              const splitDataPoint = displayData.find(item => item.name === splitDate)
+              if (splitDataPoint) {
+                return (
+                  <ReferenceLine
+                    x={splitDate}
+                    stroke="#f97316"
+                    strokeWidth={2}
+                    strokeDasharray="4 2"
+                  />
+                )
+              }
+              return null
+            })()}
             {/* 回测模式：3条线 */}
             {backtest.chartData ? (
               <>
@@ -782,59 +820,259 @@ function InteractiveChart({ content }: { content: ChartContent }) {
             )}
           </LineChart>
         </ResponsiveContainer>
-      </div>
-
-      {/* 滑块式分割点选择器 */}
-      {hasBacktestSupport && originalData && originalData.length > 60 && (
-        <div className="mt-4 px-2">
-          <div className="relative">
-            <div className="relative h-3 rounded-full overflow-hidden bg-gradient-to-r from-purple-900/30 via-purple-600/20 to-orange-600/20 border border-purple-500/30">
-              <input
-                type="range"
-                min={60}
-                max={originalData.length - 1}
-                value={backtest.splitDate && originalData ? originalData.findIndex(p => p.date === backtest.splitDate) : 60}
-                onChange={(e) => {
-                  const newIndex = parseInt(e.target.value)
-                  if (newIndex >= 60 && originalData) {
-                    backtest.triggerBacktest(originalData[newIndex].date)
+        
+        {/* X 轴滑块 - 明显的滑块圆点 */}
+        {((hasBacktestSupport && originalData && originalData.length > 60) || (data.datasets.some(d => d.label === '历史价格') && data.datasets.some(d => d.label === '预测价格'))) && plotAreaBounds && (() => {
+          // 计算分割点：拖拽时使用临时日期，否则使用回测分割点或历史价格和预测价格的分界点
+          let splitDate = isDraggingSlider && tempSplitDate ? tempSplitDate : backtest.splitDate
+          let splitIndexInChart = -1
+          
+          if (splitDate) {
+            // 回测模式：使用指定的分割点
+            splitIndexInChart = chartData.findIndex(item => item.name === splitDate)
+          } else {
+            // 正常模式：查找历史价格和预测价格的分界点
+            // 找到最后一个有历史价格值的点，下一个点就是预测价格的起点
+            for (let i = chartData.length - 1; i >= 0; i--) {
+              const item = chartData[i]
+              const historicalPrice = (item as any)['历史价格']
+              if (historicalPrice !== null && historicalPrice !== undefined) {
+                // 找到下一个有预测价格的点作为分界点
+                if (i + 1 < chartData.length) {
+                  const nextItem = chartData[i + 1]
+                  const predictedPrice = (nextItem as any)['预测价格']
+                  if (predictedPrice !== null && predictedPrice !== undefined) {
+                    splitIndexInChart = i + 1
+                    splitDate = nextItem.name as string
+                    break
                   }
-                }}
-                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
-              />
+                }
+                // 如果没有找到预测价格，使用当前点
+                if (splitIndexInChart < 0) {
+                  splitIndexInChart = i
+                  splitDate = item.name as string
+                  break
+                }
+              }
+            }
+          }
+          
+          if (!splitDate || splitIndexInChart < 0) return null
+          
+          // 检查是否在当前显示范围内
+          const isInView = splitIndexInChart >= viewStartIndex && splitIndexInChart <= viewEndIndex
+          
+          // 计算位置比例（相对于当前显示的 displayData）
+          // 需要找到分割日期在 displayData 中的索引，而不是在 chartData 中的索引
+          let positionRatio = 0
+          const splitIndexInDisplayData = displayData.findIndex(item => item.name === splitDate)
+          
+          if (splitIndexInDisplayData >= 0) {
+            // 在显示数据中找到，计算位置比例
+            const displayDataLength = displayData.length
+            // Recharts 的 X 轴是均匀分布的，所以位置比例就是索引比例
+            // 但需要考虑第一个和最后一个点的位置（它们不在边缘，而是在中间）
+            if (displayDataLength > 1) {
+              positionRatio = splitIndexInDisplayData / (displayDataLength - 1)
+            } else {
+              positionRatio = 0
+            }
+          } else if (isDraggingSlider) {
+            // 拖拽时，即使不在显示数据中，也根据位置计算显示
+            if (splitIndexInChart < viewStartIndex) {
+              positionRatio = 0 // 在视图左侧
+            } else {
+              positionRatio = 1 // 在视图右侧
+            }
+          } else {
+            // 不在显示数据中且不在拖拽，不显示
+            return null
+          }
+          
+          // X 轴位置
+          // plotAreaBounds.top + plotAreaBounds.height 是绘图区域的底部，也就是 X 轴线的位置
+          // 滑块圆点应该直接显示在 X 轴线上
+          const xAxisLineTop = plotAreaBounds.top + plotAreaBounds.height
+          // 滑块圆点在 X 轴线上，所以顶部位置是 X 轴线位置减去圆点半径（8px）以居中
+          const sliderTop = xAxisLineTop - 8
+          
+          return (
+            <>
+              {/* 滑块圆点容器 - 覆盖绘图区域 */}
               <div
-                className="absolute inset-0 bg-gradient-to-r from-purple-500 to-orange-500 transition-all duration-200"
+                className="absolute pointer-events-none z-30"
                 style={{
-                  width: backtest.splitDate && originalData
-                    ? `${((originalData.findIndex(p => p.date === backtest.splitDate) - 60) / (originalData.length - 61)) * 100}%`
-                    : '0%'
+                  left: '60px', // Y 轴宽度
+                  right: '10px', // 右侧边距
+                  top: `${sliderTop}px`, // X 轴线位置（减去圆点半径以居中）
+                  height: '16px'
                 }}
-              />
-              {backtest.splitDate && originalData && (
+              >
+                {/* 滑块圆点 - 在 X 轴上明显显示，支持拖拽 */}
                 <div
-                  className="absolute top-0 transform -translate-x-1/2 transition-all duration-200"
+                  className="absolute pointer-events-auto group"
                   style={{
-                    left: `${((originalData.findIndex(p => p.date === backtest.splitDate) - 60) / (originalData.length - 61)) * 100}%`
+                    left: `${positionRatio * 100}%`, // 在绘图区域内的位置比例
+                    transform: 'translateX(-50%)', // 居中对齐
+                    width: '16px',
+                    height: '16px'
+                  }}
+                  onMouseDown={(e) => {
+                    e.stopPropagation() // 阻止触发图表拖拽
+                    e.preventDefault()
+                    const container = chartContainerRef.current
+                    if (!container) return
+                    
+                    // 开始拖拽
+                    setIsDraggingSlider(true)
+                    
+                    const updateSplitPoint = (clientX: number, isFinal: boolean = false) => {
+                      const svg = container.querySelector('svg')
+                      if (!svg) return
+                      
+                      const svgRect = svg.getBoundingClientRect()
+                      const plotLeft = svgRect.left
+                      const plotWidth = svgRect.width
+                      
+                      // 计算鼠标在绘图区域内的位置比例
+                      const mouseX = clientX - plotLeft
+                      const positionRatio = Math.max(0, Math.min(1, mouseX / plotWidth))
+                      
+                      // 计算对应的数据点索引
+                      const viewRange = viewEndIndex - viewStartIndex + 1
+                      const relativeIndex = Math.round(positionRatio * viewRange)
+                      const targetIndex = viewStartIndex + relativeIndex
+                      
+                      // 找到对应的日期
+                      if (targetIndex >= 0 && targetIndex < chartData.length && originalData) {
+                        const targetDate = chartData[targetIndex].name
+                        if (typeof targetDate === 'string') {
+                          const originalIndex = originalData.findIndex(p => p.date === targetDate)
+                          if (originalIndex >= 60 && originalIndex < originalData.length) {
+                            if (isFinal) {
+                              // 释放鼠标时才触发回测更新
+                              backtest.triggerBacktest(targetDate)
+                              setIsDraggingSlider(false)
+                              setTempSplitDate(null)
+                            } else {
+                              // 拖拽过程中只更新临时日期，用于显示滑块位置
+                              setTempSplitDate(targetDate)
+                            }
+                          }
+                        }
+                      }
+                    }
+                    
+                    const handleMouseMove = (e: MouseEvent) => {
+                      updateSplitPoint(e.clientX, false) // 拖拽中，不触发回测
+                    }
+                    
+                    const handleMouseUp = (e: MouseEvent) => {
+                      updateSplitPoint(e.clientX, true) // 释放时，触发回测
+                      window.removeEventListener('mousemove', handleMouseMove)
+                      window.removeEventListener('mouseup', handleMouseUp)
+                    }
+                    
+                    // 立即更新一次（拖拽开始）
+                    updateSplitPoint(e.clientX, false)
+                    
+                    // 绑定全局事件以支持拖拽
+                    window.addEventListener('mousemove', handleMouseMove)
+                    window.addEventListener('mouseup', handleMouseUp)
                   }}
                 >
-                  <div className="absolute -top-6 left-1/2 transform -translate-x-1/2 flex flex-col items-center">
-                    <div className="text-orange-400 text-xl font-bold">▼</div>
-                    <div className="h-3 w-0.5 bg-orange-400"></div>
-                  </div>
-                  <div className="w-4 h-full bg-orange-500 shadow-lg shadow-orange-500/50"></div>
+                {/* 滑块圆点 - 大而明显 */}
+                <div className="w-full h-full bg-orange-400 rounded-full shadow-xl shadow-orange-400/50 border-2 border-orange-300 cursor-grab active:cursor-grabbing hover:scale-125 hover:shadow-orange-400/70 transition-all duration-200 flex items-center justify-center">
+                  {/* 内部白点 */}
+                  <div className="w-2 h-2 bg-white/90 rounded-full" />
                 </div>
-              )}
-            </div>
-            <div className="flex justify-between text-xs text-gray-500 mt-2">
-              <span className="text-purple-400">起: {originalData[60]?.date}</span>
-              {backtest.splitDate && (
-                <span className="text-orange-400 font-bold">⬇ {backtest.splitDate}</span>
-              )}
-              <span className="text-gray-500">末: {originalData[originalData.length - 1]?.date}</span>
-            </div>
-          </div>
-        </div>
-      )}
+                
+                {/* 日期标签 - 悬停时显示 */}
+                <div className="absolute top-full left-1/2 transform -translate-x-1/2 mt-2 px-2 py-1 text-xs text-orange-300 bg-dark-800/95 backdrop-blur-sm rounded-md border border-orange-400/40 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none shadow-lg">
+                  {splitDate}
+                </div>
+                </div>
+              </div>
+              
+              {/* 滑块交互区域 - 覆盖 X 轴区域，支持拖拽 */}
+              <div
+                className="absolute cursor-pointer z-20"
+                style={{
+                  left: '60px', // Y 轴宽度
+                  right: '10px', // 右侧边距
+                  top: `${xAxisLineTop - 10}px`, // X 轴线上方一点，方便交互
+                  height: `20px` // 交互区域高度，覆盖 X 轴线及其附近区域
+                }}
+                onMouseDown={(e) => {
+                  e.stopPropagation()
+                  const container = chartContainerRef.current
+                  if (!container) return
+                  
+                  // 开始拖拽
+                  setIsDraggingSlider(true)
+                  
+                  const updateSplitPoint = (clientX: number, isFinal: boolean = false) => {
+                    const svg = container.querySelector('svg')
+                    if (!svg) return
+                    
+                    const svgRect = svg.getBoundingClientRect()
+                    const plotLeft = svgRect.left
+                    const plotWidth = svgRect.width
+                    
+                    // 计算鼠标在绘图区域内的位置比例
+                    const mouseX = clientX - plotLeft
+                    const positionRatio = Math.max(0, Math.min(1, mouseX / plotWidth))
+                    
+                    // 计算对应的数据点索引
+                    const viewRange = viewEndIndex - viewStartIndex + 1
+                    const relativeIndex = Math.round(positionRatio * viewRange)
+                    const targetIndex = viewStartIndex + relativeIndex
+                    
+                    // 找到对应的日期
+                    if (targetIndex >= 0 && targetIndex < chartData.length && originalData) {
+                      const targetDate = chartData[targetIndex].name
+                      if (typeof targetDate === 'string') {
+                        const originalIndex = originalData.findIndex(p => p.date === targetDate)
+                        if (originalIndex >= 60 && originalIndex < originalData.length) {
+                          if (isFinal) {
+                            // 释放鼠标时才触发回测更新
+                            backtest.triggerBacktest(targetDate)
+                            setIsDraggingSlider(false)
+                            setTempSplitDate(null)
+                          } else {
+                            // 拖拽过程中只更新临时日期，用于显示滑块位置
+                            setTempSplitDate(targetDate)
+                          }
+                        }
+                      }
+                    }
+                  }
+                  
+                  const handleMouseMove = (e: MouseEvent) => {
+                    updateSplitPoint(e.clientX, false) // 拖拽中，不触发回测
+                  }
+                  
+                  const handleMouseUp = (e: MouseEvent) => {
+                    updateSplitPoint(e.clientX, true) // 释放时，触发回测
+                    window.removeEventListener('mousemove', handleMouseMove)
+                    window.removeEventListener('mouseup', handleMouseUp)
+                  }
+                  
+                  // 立即更新一次（拖拽开始）
+                  updateSplitPoint(e.clientX, false)
+                  
+                  // 绑定全局事件以支持拖拽
+                  window.addEventListener('mousemove', handleMouseMove)
+                  window.addEventListener('mouseup', handleMouseUp)
+                }}
+              >
+                {/* 悬停提示 - 轻微高亮 */}
+                <div className="absolute inset-0 opacity-0 hover:opacity-[0.02] bg-orange-400 transition-opacity pointer-events-none" />
+              </div>
+            </>
+          )
+        })()}
+      </div>
 
       {isZoomed && (
         <div className="mt-2 text-xs text-gray-500 text-center">
