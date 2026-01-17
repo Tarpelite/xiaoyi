@@ -32,20 +32,34 @@ export interface NewsItem {
   summarized_content: string
   original_title: string
   url: string
-  published_date: string
-  source_type: string
+  published_date: string    // 格式化后的时间，如 "01-16 14:00"
+  source_type: string       // "search" | "domain_info"
+  source_name: string       // 来源名称，如 "东方财富"、"sina.com.cn"
+}
+
+export interface RAGSource {
+  filename: string        // "茅台2024研报.pdf"
+  page: number           // 页码
+  content_snippet: string // 摘要片段
+  score: number          // 相关度分数 (0-1)
 }
 
 export interface ReportItem {
   title: string
-  summary: string
-  date: string
-  source: string
+  viewpoint: string      // LLM 提取的观点
+  source: RAGSource      // 来源信息
 }
 
 export interface EmotionData {
   score: number  // -1 到 1
   description: string
+}
+
+export interface ThinkingLogEntry {
+  step_id: string        // 步骤 ID，如 "intent", "sentiment", "report"
+  step_name: string      // 步骤名称，如 "意图识别", "情感分析", "报告生成"
+  content: string        // LLM 原始输出内容
+  timestamp: string      // ISO 格式时间戳
 }
 
 export interface UnifiedIntent {
@@ -80,7 +94,6 @@ export interface MessageData {
   // 意图识别
   intent: string  // "forecast" | "chat" | "rag" | "news" | "out_of_scope" | "pending"
   unified_intent: UnifiedIntent | null
-  is_forecast: boolean
 
   time_series_original: TimeSeriesPoint[]
   time_series_full: TimeSeriesPoint[]
@@ -89,17 +102,18 @@ export interface MessageData {
 
   news_list: NewsItem[]
   report_list: ReportItem[]
+  rag_sources: RAGSource[]  // RAG 研报来源
   emotion: number | null
   emotion_des: string | null
 
   conclusion: string
 
+  // 思考日志 (累积显示所有 LLM 调用的原始输出)
+  thinking_logs: ThinkingLogEntry[]
+
   created_at: string
   updated_at: string
   error_message: string | null
-
-  stock_code: string | null
-  model_name: string
 }
 
 // 兼容旧版类型别名
@@ -115,39 +129,6 @@ export interface AnalysisStatusResponse {
 }
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
-
-/**
- * 创建分析任务
- *
- * @param message 用户问题
- * @param model 预测模型
- * @param context 上下文
- * @param sessionId 会话ID (多轮对话时传入，复用同一会话)
- * @returns { session_id, message_id, status }
- */
-export async function createAnalysisTask(
-  message: string,
-  model: string = 'prophet',
-  context: string = '',
-  sessionId?: string | null
-): Promise<CreateAnalysisResponse> {
-  const response = await fetch(`${API_BASE_URL}/api/analysis/create`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      message,
-      model,
-      context,
-      session_id: sessionId || null
-    })
-  })
-
-  if (!response.ok) {
-    throw new Error(`Failed to create analysis task: ${response.statusText}`)
-  }
-
-  return response.json()
-}
 
 /**
  * 查询任务状态
@@ -213,19 +194,6 @@ export async function getSessionHistory(sessionId: string): Promise<SessionHisto
   } catch (error) {
     console.error('获取会话历史失败:', error)
     return null
-  }
-}
-
-/**
- * 删除会话
- */
-export async function deleteAnalysisSession(sessionId: string): Promise<void> {
-  const response = await fetch(`${API_BASE_URL}/api/analysis/${sessionId}`, {
-    method: 'DELETE'
-  })
-
-  if (!response.ok) {
-    throw new Error(`Failed to delete session: ${response.statusText}`)
   }
 }
 

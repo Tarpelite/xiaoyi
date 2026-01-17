@@ -47,8 +47,8 @@ coverage/
 # Data files
 *.pdf
 *.zip
-# energy_reports/
-# energy_reports_test/
+energy_reports/
+energy_reports_test/
 
 # Model cache
 .cache/
@@ -59,4 +59,9 @@ qdrant_storage/
 
 # Embedded repositories
 xiaoyi-rag-service/
+
+# Claude settings
+.claude/
+
+# TypeScript build info
 /frontend/tsconfig.tsbuildinfo

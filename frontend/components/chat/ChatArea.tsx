@@ -7,6 +7,7 @@ import { MessageBubble } from './MessageBubble'
 import { QuickSuggestions } from './QuickSuggestions'
 import { AnalysisCards } from './AnalysisCards'
 import { cn } from '@/lib/utils'
+import type { RAGSource, ThinkingLogEntry } from '@/lib/api/analysis'
 
 // 步骤状态
 export type StepStatus = 'pending' | 'running' | 'completed' | 'failed'
@@ -104,6 +105,10 @@ export interface Message {
   renderMode?: RenderMode
   // 思考过程内容（LLM 实时推理）
   thinkingContent?: string
+  // RAG 研报来源
+  ragSources?: RAGSource[]
+  // 累积的思考日志（显示各步骤 LLM 原始输出）
+  thinkingLogs?: ThinkingLogEntry[]
 }
 
 // 预测步骤定义（6个步骤）- 与后端 FORECAST_STEPS 保持一致
@@ -309,6 +314,8 @@ export function ChatArea({ sessionId: externalSessionId }: ChatAreaProps) {
                 text: data.conclusion || '已完成分析'
               }],
               renderMode: isForecastIntent ? 'forecast' : 'chat',
+              ragSources: data.rag_sources || [], // RAG 研报来源
+              thinkingLogs: data.thinking_logs || [], // 思考日志
             })
           }
         }
@@ -382,7 +389,9 @@ export function ChatArea({ sessionId: externalSessionId }: ChatAreaProps) {
         url: string
         published_date: string
         source_type: string
+        source_name?: string
       }>
+      rag_sources?: RAGSource[]
       conclusion?: string
       is_time_series?: boolean
       conversational_response?: string
@@ -404,9 +413,10 @@ export function ChatArea({ sessionId: externalSessionId }: ChatAreaProps) {
     }
 
     // 判断是否是简单问答：只有 conclusion，没有其他结构化数据
+    // 注意：emotion 为 0 是有效值（中性情绪），需要用 === null/undefined 判断
     const isSimpleAnswer = data.conclusion &&
       (!data.time_series_full || data.time_series_full.length === 0) &&
-      (!data.emotion || data.emotion === null) &&
+      (data.emotion === null || data.emotion === undefined) &&
       (!data.news_list || data.news_list.length === 0)
 
     // 如果是简单问答，只返回文本内容，不生成结构化数据
@@ -425,12 +435,28 @@ export function ChatArea({ sessionId: externalSessionId }: ChatAreaProps) {
     const isCompleted = status === 'completed' || currentStep >= 6
 
     // 1. 市场情绪（步骤4"分析处理"完成后显示）
+    // DEBUG: 输出情绪数据用于调试
+    const hasValidEmotion_debug = typeof data.emotion === 'number'
+    const hasEmotionDes_debug = data.emotion_des !== null && data.emotion_des !== undefined
+    console.log('[Emotion Debug]', {
+      currentStep,
+      isCompleted,
+      emotion: data.emotion,
+      emotion_des: data.emotion_des,
+      willAddEmotion: (currentStep >= 4 || isCompleted) && hasValidEmotion_debug && hasEmotionDes_debug,
+      conditions: { hasValidEmotion: hasValidEmotion_debug, hasEmotionDes: hasEmotionDes_debug }
+    })
     if (currentStep >= 4 || isCompleted) {
-      if (data.emotion !== null && data.emotion !== undefined && typeof data.emotion === 'number' && data.emotion_des) {
-        // 使用后端返回的真实数据
+      // emotion_des 可能是空字符串，需要使用严格的 null/undefined 检查
+      const hasValidEmotion = typeof data.emotion === 'number'
+      const hasEmotionDes = data.emotion_des !== null && data.emotion_des !== undefined
+
+      if (hasValidEmotion && hasEmotionDes) {
+        // 使用后端返回的真实数据（emotion_des 为空字符串时使用默认值）
+        const emotionDescription = data.emotion_des || '中性'
         contents.push({
           type: 'text',
-          text: `__EMOTION_MARKER__${data.emotion}__${data.emotion_des}__`
+          text: `__EMOTION_MARKER__${data.emotion}__${emotionDescription}__`
         })
       } else if (isCompleted) {
         // 已完成但无数据，使用模拟数据
@@ -450,11 +476,11 @@ export function ChatArea({ sessionId: externalSessionId }: ChatAreaProps) {
       contents.push({
         type: 'table',
         title: '', // 标题由外层MessageBubble显示"相关新闻"，这里不重复显示
-        headers: ['标题', '来源', '日期'],
+        headers: ['标题', '来源', '时间'],
         rows: data.news_list.slice(0, 10).map((news) => [
           // 如果有 URL，使用 markdown 链接格式 [标题](url)；否则只显示标题
           news.url ? `[${news.summarized_title}](${news.url})` : news.summarized_title,
-          news.source_type === 'search' ? '网络搜索' : '领域资讯',
+          news.source_name || (news.source_type === 'search' ? '网络' : '资讯'),
           news.published_date
         ])
       })
@@ -584,6 +610,18 @@ export function ChatArea({ sessionId: externalSessionId }: ChatAreaProps) {
     try {
       // 使用 analysis API - 流式获取思考内容
       const { streamAnalysisTask, pollAnalysisStatus, getAnalysisStatus } = await import('@/lib/api/analysis')
+      const { createSession } = await import('@/lib/api/sessions')
+
+      // 确保 session 存在（后端要求 session_id 必填）
+      let activeSessionId = sessionId
+      if (!activeSessionId) {
+        const newSession = await createSession()
+        activeSessionId = newSession.session_id
+        setSessionId(activeSessionId)
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('chat_session_id', activeSessionId)
+        }
+      }
 
       // 阶段1: 使用 SSE 流式获取思考内容
       const { session_id: currentSessionId, message_id: currentMessageId } = await streamAnalysisTask(
@@ -638,7 +676,7 @@ export function ChatArea({ sessionId: externalSessionId }: ChatAreaProps) {
       if (initialStatus.status === 'completed') {
         const { data } = initialStatus
 
-        // 简单问答：只显示文本内容，renderMode 为 chat
+        // 简单问答：只显示文本内容，renderMode 为 chat（保留 thinkingContent 和 thinkingLogs）
         setMessages((prev: Message[]) => prev.map((msg: Message) =>
           msg.id === assistantMessageId
             ? {
@@ -648,7 +686,8 @@ export function ChatArea({ sessionId: externalSessionId }: ChatAreaProps) {
                 text: data.conclusion || '已收到回答'
               }],
               steps: undefined,
-              renderMode: 'chat' as RenderMode
+              renderMode: 'chat' as RenderMode,
+              thinkingLogs: data.thinking_logs || msg.thinkingLogs || []
             }
             : msg
         ))
@@ -666,6 +705,17 @@ export function ChatArea({ sessionId: externalSessionId }: ChatAreaProps) {
             }
             const { data, steps: currentStep, status } = statusResponse
 
+            // DEBUG: 输出轮询响应数据
+            console.log('[Poll Debug] statusResponse:', {
+              currentStep,
+              status,
+              intent: data.intent,
+              emotion: data.emotion,
+              emotion_des: data.emotion_des,
+              hasTimeSeries: data.time_series_full?.length || 0,
+              hasNews: data.news_list?.length || 0
+            })
+
             // 🎯 根据后端返回的 intent 决定渲染模式
             const isForecastIntent = data.intent === 'forecast' ||
               (data.unified_intent && data.unified_intent.is_forecast)
@@ -680,7 +730,7 @@ export function ChatArea({ sessionId: externalSessionId }: ChatAreaProps) {
             const isSimpleAnswer = !isForecastIntent && status === 'completed' && data.conclusion
 
             if (isSimpleAnswer) {
-              // 简单问答：只显示文本内容，renderMode 为 chat
+              // 简单问答：只显示文本内容，renderMode 为 chat（保留 thinkingContent 和 thinkingLogs）
               setMessages((prev: Message[]) => prev.map((msg: Message) =>
                 msg.id === assistantMessageId
                   ? {
@@ -690,7 +740,8 @@ export function ChatArea({ sessionId: externalSessionId }: ChatAreaProps) {
                       text: data.conclusion
                     }],
                     steps: undefined,
-                    renderMode: 'chat' as RenderMode
+                    renderMode: 'chat' as RenderMode,
+                    thinkingLogs: data.thinking_logs || msg.thinkingLogs || []
                   }
                   : msg
               ))
@@ -702,14 +753,19 @@ export function ChatArea({ sessionId: externalSessionId }: ChatAreaProps) {
               // 转换内容（传入当前步骤和状态，只显示已完成步骤的内容）
               const contents = convertAnalysisToContents(data, currentStep, status)
 
-              // 更新消息（保留 thinkingContent）
+              // DEBUG: 输出转换后的 contents
+              console.log('[Poll Debug] converted contents:', contents.map(c => ({ type: c.type, hasEmotion: c.type === 'text' && c.text?.startsWith('__EMOTION_MARKER__') })))
+
+              // 更新消息（保留 thinkingContent，添加 ragSources 和 thinkingLogs）
               setMessages((prev: Message[]) => prev.map((msg: Message) =>
                 msg.id === assistantMessageId
                   ? {
                     ...msg,
                     steps: status === 'completed' ? undefined : steps, // 完成后隐藏步骤
                     contents: contents.length > 0 ? contents : [], // 清空旧内容，避免显示上次的数据
-                    renderMode: currentRenderMode // 根据 intent 设置渲染模式
+                    renderMode: currentRenderMode, // 根据 intent 设置渲染模式
+                    ragSources: data.rag_sources || [], // RAG 研报来源
+                    thinkingLogs: data.thinking_logs || msg.thinkingLogs || [] // 累积的思考日志（保留已有的）
                   }
                   : msg
               ))

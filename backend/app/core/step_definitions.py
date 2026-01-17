@@ -124,17 +124,3 @@ def get_step_count(intent: str, has_stock: bool = False) -> int:
         步骤数量
     """
     return len(get_steps_for_intent(intent, has_stock))
-
-
-# 步骤状态映射
-STEP_STATUS = {
-    "pending": "待处理",
-    "running": "执行中",
-    "completed": "已完成",
-    "error": "出错",
-}
-
-
-def get_step_status_text(status: str) -> str:
-    """获取步骤状态的中文描述"""
-    return STEP_STATUS.get(status, status)

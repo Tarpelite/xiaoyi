@@ -29,9 +29,12 @@ class ReportAgent:
         forecast_result: Dict[str, Any],
         sentiment_result: Optional[Dict[str, Any]] = None,
         conversation_history: Optional[List[Dict[str, str]]] = None
-    ) -> str:
+    ) -> Dict[str, str]:
         """
         生成分析报告内容
+
+        Returns:
+            Dict with 'content' (报告内容) and 'raw_response' (原始 LLM 输出)
         """
         # 提取预测数据
         forecast_summary = forecast_result.get("forecast", [])
@@ -165,8 +168,15 @@ class ReportAgent:
                 model="deepseek-chat",
                 messages=messages,
                 temperature=0.3,
-                max_tokens=1500,
             )
-            return response.choices[0].message.content
+            raw_content = response.choices[0].message.content
+            return {
+                "content": raw_content,
+                "raw_response": raw_content  # 报告内容即原始输出
+            }
         except Exception as e:
-            return f"生成报告时发生 API 错误: {str(e)}"
+            error_msg = f"生成报告时发生 API 错误: {str(e)}"
+            return {
+                "content": error_msg,
+                "raw_response": error_msg
+            }

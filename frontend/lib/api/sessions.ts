@@ -1,13 +1,38 @@
 /**
  * Sessions API Client
  * ====================
- * 
+ *
  * API functions for session management
  */
 
 import type { SessionMetadata } from '../types/session'
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+
+export interface CreateSessionResponse {
+    session_id: string
+    title: string
+    created_at: string
+}
+
+/**
+ * Create a new session
+ */
+export async function createSession(title?: string): Promise<CreateSessionResponse> {
+    const response = await fetch(`${API_BASE}/api/sessions`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ title: title || null }),
+    })
+
+    if (!response.ok) {
+        throw new Error(`Failed to create session: ${response.statusText}`)
+    }
+
+    return response.json()
+}
 
 /**
  * Get all sessions

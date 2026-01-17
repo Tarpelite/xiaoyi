@@ -63,8 +63,10 @@ class SentimentAgent:
                 response_format={"type": "json_object"}
             )
 
-            result = json.loads(response.choices[0].message.content)
+            raw_content = response.choices[0].message.content
+            result = json.loads(raw_content)
             result["news_count"] = len(news_df)
+            result["raw_response"] = raw_content  # 保存原始输出用于思考日志
             return result
 
         except Exception as e:

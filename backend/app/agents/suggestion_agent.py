@@ -5,7 +5,9 @@
 根据对话上下文生成相关的快速追问建议
 """
 
+import json
 from typing import List, Dict, Optional
+
 from openai import OpenAI
 
 
@@ -77,8 +79,7 @@ class SuggestionAgent:
             temperature=0.7,
             response_format={"type": "json_object"}
         )
-        
-        import json
+
         result = json.loads(response.choices[0].message.content)
         suggestions = result.get("suggestions", [])
         

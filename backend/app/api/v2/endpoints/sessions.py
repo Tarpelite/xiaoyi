@@ -22,12 +22,55 @@ class SessionListItem(BaseModel):
     message_count: int
 
 
+class CreateSessionRequest(BaseModel):
+    """创建会话请求"""
+    title: Optional[str] = None
+    context: Optional[str] = None
+
+
+class CreateSessionResponse(BaseModel):
+    """创建会话响应"""
+    session_id: str
+    title: str
+    created_at: str
+
+
 class UpdateSessionRequest(BaseModel):
     """更新会话请求"""
     title: str
 
 
 router = APIRouter()
+
+
+@router.post("/sessions", response_model=CreateSessionResponse)
+async def create_session(request: CreateSessionRequest = None):
+    """
+    创建新会话
+
+    Args:
+        request: 可选的创建请求
+            - title: 会话标题（可选，默认"新对话"）
+            - context: 上下文信息（可选）
+
+    Returns:
+        CreateSessionResponse: 包含 session_id, title, created_at
+    """
+    req = request or CreateSessionRequest()
+
+    session = Session.create(context=req.context)
+
+    # 如果提供了标题，更新标题
+    if req.title:
+        session.update_title(req.title)
+
+    data = session.get()
+
+    return CreateSessionResponse(
+        session_id=session.session_id,
+        title=data.title if data else "新对话",
+        created_at=data.created_at if data else ""
+    )
 
 
 @router.get("/sessions", response_model=List[SessionListItem])

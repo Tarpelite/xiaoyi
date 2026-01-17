@@ -13,10 +13,13 @@
 
 import asyncio
 import json
+import math
 import os
+import time
 import concurrent.futures
 from typing import Optional
 
+import pandas as pd
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -27,9 +30,10 @@ from app.core.unified_tasks import get_task_processor
 from app.schemas.session_schema import (
     CreateAnalysisRequest,
     AnalysisStatusResponse,
-    SessionStatus,
     BacktestRequest,
-    BacktestResponse
+    BacktestResponse,
+    BacktestMetrics,
+    TimeSeriesPoint,
 )
 from app.agents import SuggestionAgent, IntentAgent
 
@@ -91,8 +95,7 @@ async def create_analysis_task(
     else:
         # 创建新 session
         session = Session.create(
-            context=request.context,
-            model_name=request.model
+            context=request.context
         )
         is_new_session = True
 
@@ -221,26 +224,6 @@ async def get_session_history(session_id: str):
     }
 
 
-@router.delete("/{session_id}")
-async def delete_analysis_session(session_id: str):
-    """
-    删除分析会话
-
-    Args:
-        session_id: 会话 ID
-
-    Returns:
-        {"message": "会话已删除"}
-    """
-    if not Session.exists(session_id):
-        raise HTTPException(status_code=404, detail="会话不存在")
-
-    session = Session(session_id)
-    session.delete()
-
-    return {"message": "会话已删除"}
-
-
 @router.post("/suggestions")
 async def get_suggestions(request: SuggestionsRequest):
     """
@@ -313,8 +296,7 @@ async def stream_analysis(
         session = Session(request.session_id)
     else:
         session = Session.create(
-            context=request.context,
-            model_name=request.model
+            context=request.context
         )
         is_new_session = True
 
@@ -415,7 +397,6 @@ async def stream_analysis(
         yield f"data: {json.dumps({'type': 'done', 'completed': False})}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
-    return {"suggestions": suggestions}
 
 
 @router.post("/backtest")
@@ -438,11 +419,6 @@ async def backtest_prediction(request: "BacktestRequest"):
             - backtest_data: 回测预测结果
             - ground_truth: 实际历史数据
     """
-    from app.schemas.session_schema import BacktestMetrics, TimeSeriesPoint
-    import time
-    import pandas as pd
-    import math
-    
     start_time = time.time()
     
     # 1. 验证会话和消息
@@ -455,7 +431,9 @@ async def backtest_prediction(request: "BacktestRequest"):
     if not data:
         raise HTTPException(404, "消息不存在")
     
-    if not data.is_forecast or not data.time_series_original:
+    # 检查是否是预测类型的消息
+    is_forecast = data.intent == 'forecast' or (data.unified_intent and data.unified_intent.is_forecast)
+    if not is_forecast or not data.time_series_original:
         raise HTTPException(400, "该消息不包含预测数据")
     
     original_data = data.time_series_original
@@ -485,15 +463,7 @@ async def backtest_prediction(request: "BacktestRequest"):
     api_key = os.getenv("DEEPSEEK_API_KEY")
     if not api_key:
         raise HTTPException(500, "API key not configured")
-    
-    # 4. 重新预测（复用现有预测逻辑）
-    try:
-        # Use the api_key obtained from os.getenv, or fall back to settings.api_key if preferred
-        # For now, keeping the user's provided api_key logic.
-        pass 
-    except ValueError as e:
-        raise HTTPException(500, str(e))
-    
+
     task_processor = get_task_processor(api_key)
     
     # 转换为DataFrame
@@ -547,9 +517,7 @@ async def backtest_prediction(request: "BacktestRequest"):
         
         if actual != 0:
             abs_percentage_errors.append(abs(error / actual) * 100)
-    
-    mae = sum(abs(e) for e in errors) / len(errors)
-    rmse = math.sqrt(sum(e**2 for e in errors) / len(errors))
+
     mae = sum(abs(e) for e in errors) / len(errors) if errors else 0.0
     rmse = math.sqrt(sum(e**2 for e in errors) / len(errors)) if errors else 0.0
     mape = sum(abs_percentage_errors) / len(abs_percentage_errors) if abs_percentage_errors else 0

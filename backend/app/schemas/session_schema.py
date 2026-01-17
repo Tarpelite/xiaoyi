@@ -17,8 +17,8 @@ from enum import Enum
 
 # ========== 枚举类型 ==========
 
-class SessionStatus(str, Enum):
-    """会话状态"""
+class MessageStatus(str, Enum):
+    """消息状态"""
     PENDING = "pending"
     PROCESSING = "processing"
     COMPLETED = "completed"
@@ -57,21 +57,15 @@ class RAGSource(BaseModel):
     score: float = 0.0     # 相关度分数
 
 
-class WebSource(BaseModel):
-    """网页来源"""
-    title: str
-    url: str
-    source_type: str       # "search" | "domain_info"
-
-
 class SummarizedNewsItem(BaseModel):
     """LLM 总结后的新闻条目"""
     summarized_title: str       # LLM 总结的标题
     summarized_content: str     # LLM 总结的摘要
     original_title: str         # 原标题
     url: str                    # 来源链接
-    published_date: str
+    published_date: str         # 格式化后的时间，如 "01-16 14:00"
     source_type: str            # "search" | "domain_info"
+    source_name: str = ""       # 来源名称，如 "东方财富"、"新浪财经"
 
 
 class ReportItem(BaseModel):
@@ -87,6 +81,14 @@ class StepDetail(BaseModel):
     name: str
     status: StepStatus = StepStatus.PENDING
     message: str = ""
+
+
+class ThinkingLogEntry(BaseModel):
+    """思考日志条目 - 记录每个 LLM 调用的原始输出"""
+    step_id: str                    # 步骤 ID，如 "intent", "sentiment", "report"
+    step_name: str                  # 步骤名称，如 "意图识别", "情感分析", "报告生成"
+    content: str                    # LLM 原始输出内容
+    timestamp: str                  # ISO 格式时间戳
 
 
 # ========== 意图识别相关 ==========
@@ -166,7 +168,7 @@ class MessageData(BaseModel):
     user_query: str = ""
 
     # 状态
-    status: SessionStatus = SessionStatus.PENDING
+    status: MessageStatus = MessageStatus.PENDING
     steps: int = 0
     total_steps: int = 0
     step_details: List[StepDetail] = Field(default_factory=list)
@@ -174,15 +176,10 @@ class MessageData(BaseModel):
     # 意图识别
     intent: str = "pending"  # forecast/rag/news/chat/out_of_scope
     unified_intent: Optional[UnifiedIntent] = None
-    is_forecast: bool = False
 
     # 股票匹配
     stock_match: Optional[StockMatchResult] = None
-    stock_code: Optional[str] = None
     resolved_keywords: Optional[ResolvedKeywords] = None
-
-    # 模型配置
-    model_name: str = "prophet"
 
     # 时序数据 (仅预测)
     time_series_original: List[TimeSeriesPoint] = Field(default_factory=list)
@@ -203,6 +200,9 @@ class MessageData(BaseModel):
     conclusion: str = ""
     error_message: Optional[str] = None
 
+    # 思考日志 (累积显示所有 LLM 调用的原始输出)
+    thinking_logs: List[ThinkingLogEntry] = Field(default_factory=list)
+
 
 class SessionData(BaseModel):
     """
@@ -218,7 +218,7 @@ class SessionData(BaseModel):
 
     # 全局配置
     context: str = ""
-    model_name: str = "prophet"
+    model_name: Optional[str] = Field(default=None, description="使用的预测模型名称")
 
     # 消息管理
     message_ids: List[str] = Field(default_factory=list)
@@ -233,9 +233,8 @@ class SessionData(BaseModel):
 class CreateAnalysisRequest(BaseModel):
     """创建分析任务请求"""
     message: str = Field(..., description="用户问题")
-    session_id: Optional[str] = Field(default=None, description="会话ID，多轮对话时复用")
+    session_id: str = Field(..., description="会话ID（必填，通过 POST /api/sessions 创建）")
     model: str = Field(default="prophet", description="预测模型")
-    context: str = Field(default="", description="上下文")
     force_intent: Optional[str] = Field(default=None, description="强制指定意图")
 
 
@@ -243,7 +242,7 @@ class AnalysisStatusResponse(BaseModel):
     """分析状态响应"""
     session_id: str
     message_id: str
-    status: SessionStatus
+    status: MessageStatus
     steps: int
     total_steps: int = 0
     data: MessageData
@@ -256,8 +255,9 @@ class NewsItem(BaseModel):
     title: str
     content: str
     url: str
-    published_date: str
+    published_date: str     # 格式化后的时间，如 "01-16 14:00"
     source_type: str        # "search" | "domain_info"
+    source_name: str = ""   # 来源名称，如 "东方财富"、"新浪财经"
     score: float = 0.0
 
 
@@ -274,7 +274,7 @@ class NewsSummaryResult(BaseModel):
 class BacktestRequest(BaseModel):
     """
     回测请求模型
-    
+
     用于交互式时间旅行回测功能
     """
     session_id: str = Field(description="会话ID")
@@ -294,7 +294,7 @@ class BacktestMetrics(BaseModel):
 class BacktestResponse(BaseModel):
     """
     回测响应模型
-    
+
     Returns:
         metrics: 预测误差指标
         backtest_data: 回测预测结果

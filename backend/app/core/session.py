@@ -9,7 +9,6 @@ Session 管理模块
 - Message: 一轮 QA (存储所有分析结果数据)
 """
 
-import json
 import uuid
 from datetime import datetime
 from typing import Optional, List, Dict
@@ -19,9 +18,10 @@ from app.core.redis_client import get_redis
 from app.schemas.session_schema import (
     SessionData,
     MessageData,
-    SessionStatus,
+    MessageStatus,
     StepStatus,
     StepDetail,
+    ThinkingLogEntry,
     UnifiedIntent,
     ResolvedKeywords,
     StockMatchResult,
@@ -48,7 +48,7 @@ class Message:
         self.ttl = 86400  # 24小时过期
 
     @classmethod
-    def create(cls, session_id: str, user_query: str, model_name: str = "prophet") -> "Message":
+    def create(cls, session_id: str, user_query: str) -> "Message":
         """创建新消息"""
         message_id = str(uuid.uuid4())
         message = cls(message_id, session_id)
@@ -58,8 +58,7 @@ class Message:
             message_id=message_id,
             session_id=session_id,
             user_query=user_query,
-            model_name=model_name,
-            status=SessionStatus.PENDING,
+            status=MessageStatus.PENDING,
             created_at=now,
             updated_at=now
         )
@@ -99,7 +98,6 @@ class Message:
         data = self.get()
         if data:
             data.unified_intent = intent
-            data.is_forecast = intent.is_forecast
 
             # 设置 intent 字段
             if not intent.is_in_scope:
@@ -131,8 +129,6 @@ class Message:
         data = self.get()
         if data:
             data.stock_match = result
-            if result.success and result.stock_info:
-                data.stock_code = result.stock_info.stock_code
             self._save(data)
             print(f"[Message] Stock match: {result.success}")
 
@@ -150,7 +146,7 @@ class Message:
         data = self.get()
         if data and 0 < step <= len(data.step_details):
             data.steps = step
-            data.status = SessionStatus.PROCESSING
+            data.status = MessageStatus.PROCESSING
             data.step_details[step - 1].status = StepStatus(status)
             data.step_details[step - 1].message = message
             self._save(data)
@@ -216,7 +212,7 @@ class Message:
         """标记为完成"""
         data = self.get()
         if data:
-            data.status = SessionStatus.COMPLETED
+            data.status = MessageStatus.COMPLETED
             data.steps = data.total_steps
             for step in data.step_details:
                 if step.status != StepStatus.ERROR:
@@ -228,10 +224,26 @@ class Message:
         """标记为错误"""
         data = self.get()
         if data:
-            data.status = SessionStatus.ERROR
+            data.status = MessageStatus.ERROR
             data.error_message = error_message
             self._save(data)
             print(f"[Message] Error: {error_message}")
+
+    # ========== 思考日志 ==========
+
+    def append_thinking_log(self, step_id: str, step_name: str, content: str):
+        """追加思考日志条目（累积显示）"""
+        data = self.get()
+        if data:
+            entry = ThinkingLogEntry(
+                step_id=step_id,
+                step_name=step_name,
+                content=content,
+                timestamp=datetime.now().isoformat()
+            )
+            data.thinking_logs.append(entry)
+            self._save(data)
+            print(f"[Message] Thinking log: {step_id} - {len(content)} chars")
 
 
 class Session:
@@ -248,7 +260,7 @@ class Session:
         self.ttl = 86400  # 24小时过期
 
     @classmethod
-    def create(cls, context: str = "", model_name: str = "prophet") -> "Session":
+    def create(cls, context: str = "") -> "Session":
         """创建新会话"""
         session_id = str(uuid.uuid4())
         session = cls(session_id)
@@ -257,7 +269,6 @@ class Session:
         initial_data = SessionData(
             session_id=session_id,
             context=context,
-            model_name=model_name,
             created_at=now,
             updated_at=now
         )
@@ -307,8 +318,7 @@ class Session:
         # 创建消息
         message = Message.create(
             session_id=self.session_id,
-            user_query=user_query,
-            model_name=data.model_name
+            user_query=user_query
         )
 
         # 添加到 session

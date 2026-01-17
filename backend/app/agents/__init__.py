@@ -10,15 +10,7 @@ from .intent_agent import IntentAgent
 from .suggestion_agent import SuggestionAgent
 from .error_explainer import ErrorExplainerAgent
 from .sentiment_agent import SentimentAgent
-
-# RAG Agent 可选导入（依赖 Qdrant 和 FlagEmbedding）
-try:
-    from .rag_agent import RAGAgent
-    RAG_AVAILABLE = True
-except ImportError as e:
-    RAGAgent = None
-    RAG_AVAILABLE = False
-    print(f"[Warning] RAG Agent 不可用: {e}")
+from .news_summary_agent import NewsSummaryAgent
 
 __all__ = [
     "ReportAgent",
@@ -26,6 +18,5 @@ __all__ = [
     "SuggestionAgent",
     "ErrorExplainerAgent",
     "SentimentAgent",
-    "RAGAgent",
-    "RAG_AVAILABLE",
+    "NewsSummaryAgent",
 ]

@@ -22,16 +22,26 @@ class IntentAgent:
     """统一意图识别 Agent"""
 
     def __init__(self, api_key: str, base_url: str = "https://api.deepseek.com"):
-        """
-        初始化 Intent Agent
+        self.client = OpenAI(api_key=api_key, base_url=base_url)
 
-        Args:
-            api_key: API Key
-            base_url: API Base URL
-        """
-        self.client = OpenAI(
-            api_key=api_key,
-            base_url=base_url
+    def _build_intent(self, result: Dict) -> UnifiedIntent:
+        """从 LLM 返回的 dict 构建 UnifiedIntent 对象"""
+        return UnifiedIntent(
+            is_in_scope=result.get("is_in_scope", True),
+            is_forecast=result.get("is_forecast", False),
+            enable_rag=result.get("enable_rag", False),
+            enable_search=result.get("enable_search", False),
+            enable_domain_info=result.get("enable_domain_info", False),
+            stock_mention=result.get("stock_mention") or None,
+            stock_full_name=result.get("stock_full_name") or None,
+            raw_search_keywords=result.get("raw_search_keywords", []),
+            raw_rag_keywords=result.get("raw_rag_keywords", []),
+            raw_domain_keywords=result.get("raw_domain_keywords", []),
+            forecast_model=result.get("forecast_model", "prophet"),
+            history_days=result.get("history_days", 365),
+            forecast_horizon=result.get("forecast_horizon", 30),
+            reason=result.get("reason", ""),
+            out_of_scope_reply=result.get("out_of_scope_reply")
         )
 
     def recognize_intent(
@@ -193,25 +203,7 @@ class IntentAgent:
         )
 
         result = json.loads(response.choices[0].message.content)
-
-        # 转换为 UnifiedIntent
-        return UnifiedIntent(
-            is_in_scope=result.get("is_in_scope", True),
-            is_forecast=result.get("is_forecast", False),
-            enable_rag=result.get("enable_rag", False),
-            enable_search=result.get("enable_search", False),
-            enable_domain_info=result.get("enable_domain_info", False),
-            stock_mention=result.get("stock_mention") or None,
-            stock_full_name=result.get("stock_full_name") or None,
-            raw_search_keywords=result.get("raw_search_keywords", []),
-            raw_rag_keywords=result.get("raw_rag_keywords", []),
-            raw_domain_keywords=result.get("raw_domain_keywords", []),
-            forecast_model=result.get("forecast_model", "prophet"),
-            history_days=result.get("history_days", 365),
-            forecast_horizon=result.get("forecast_horizon", 30),
-            reason=result.get("reason", ""),
-            out_of_scope_reply=result.get("out_of_scope_reply")
-        )
+        return self._build_intent(result)
 
     def recognize_intent_streaming(
         self,
@@ -350,25 +342,7 @@ class IntentAgent:
         if not thinking_content:
             thinking_content = result.get("reason", "")
 
-        intent = UnifiedIntent(
-            is_in_scope=result.get("is_in_scope", True),
-            is_forecast=result.get("is_forecast", False),
-            enable_rag=result.get("enable_rag", False),
-            enable_search=result.get("enable_search", False),
-            enable_domain_info=result.get("enable_domain_info", False),
-            stock_mention=result.get("stock_mention") or None,
-            stock_full_name=result.get("stock_full_name") or None,
-            raw_search_keywords=result.get("raw_search_keywords", []),
-            raw_rag_keywords=result.get("raw_rag_keywords", []),
-            raw_domain_keywords=result.get("raw_domain_keywords", []),
-            forecast_model=result.get("forecast_model", "prophet"),
-            history_days=result.get("history_days", 365),
-            forecast_horizon=result.get("forecast_horizon", 30),
-            reason=result.get("reason", ""),
-            out_of_scope_reply=result.get("out_of_scope_reply")
-        )
-
-        return intent, thinking_content
+        return self._build_intent(result), thinking_content
 
     def resolve_keywords(
         self,
@@ -487,7 +461,6 @@ class IntentAgent:
                 model="deepseek-chat",
                 messages=messages,
                 temperature=0.3,
-                max_tokens=800
             )
             return response.choices[0].message.content
 
@@ -497,81 +470,9 @@ class IntentAgent:
             model="deepseek-chat",
             messages=messages,
             temperature=0.3,
-            max_tokens=800,
-            stream=True
+            stream=True,
         )
 
         for chunk in response:
             if chunk.choices and chunk.choices[0].delta.content:
                 yield chunk.choices[0].delta.content
-
-    def generate_conclusion(
-        self,
-        user_query: str,
-        historical_analysis: str,
-        news_summary: str,
-        report_summary: str,
-        emotion_result: Dict,
-        prediction_result: Dict,
-        stock_info: Dict,
-    ) -> str:
-        """
-        生成预测流程的综合结论
-
-        Args:
-            user_query: 用户问题
-            historical_analysis: 历史数据分析结果
-            news_summary: 新闻总结
-            report_summary: 研报观点总结
-            emotion_result: 情感分析结果
-            prediction_result: 预测结果
-            stock_info: 股票信息
-
-        Returns:
-            综合分析报告
-        """
-        system_prompt = """你是专业的金融分析师。根据提供的分析结果，生成综合分析报告。
-
-报告要求：
-1. 结构清晰，分点论述
-2. 综合考虑历史走势、新闻情绪、研报观点、模型预测
-3. 给出合理的投资建议（需声明仅供参考）
-4. 语言专业简洁
-5. 如果某项数据缺失，不要提及
-
-报告结构建议：
-1. 近期走势回顾
-2. 市场情绪分析
-3. 研报观点总结（如有）
-4. 模型预测结果
-5. 综合观点与建议"""
-
-        context = f"""股票: {stock_info.get('stock_name', '')} ({stock_info.get('stock_code', '')})
-
-历史数据分析:
-{historical_analysis}
-
-新闻情绪:
-{news_summary}
-情绪分数: {emotion_result.get('score', 'N/A')} (范围 -1 到 1)
-情绪描述: {emotion_result.get('summary', 'N/A')}
-
-研报观点:
-{report_summary if report_summary else '暂无研报数据'}
-
-模型预测:
-预测模型: {prediction_result.get('model', 'N/A')}
-预测趋势: {prediction_result.get('trend', 'N/A')}
-预测区间: {prediction_result.get('range', 'N/A')}"""
-
-        response = self.client.chat.completions.create(
-            model="deepseek-chat",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"用户问题: {user_query}\n\n分析数据:\n{context}\n\n请生成综合分析报告。"}
-            ],
-            temperature=0.3,
-            max_tokens=1500
-        )
-
-        return response.choices[0].message.content

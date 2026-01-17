@@ -213,6 +213,8 @@ class RAGClient:
 
 # Singleton instance
 _client_instance: Optional[RAGClient] = None
+# 缓存 RAG 服务可用性状态
+_rag_available: Optional[bool] = None
 
 
 def get_rag_client() -> RAGClient:
@@ -221,3 +223,27 @@ def get_rag_client() -> RAGClient:
     if _client_instance is None:
         _client_instance = RAGClient()
     return _client_instance
+
+
+async def check_rag_availability() -> bool:
+    """
+    检查并缓存 RAG 服务可用性
+
+    在应用启动时调用，结果会被缓存
+    """
+    global _rag_available
+    client = get_rag_client()
+    health = await client.health()
+    _rag_available = health.get("status") == "healthy"
+    return _rag_available
+
+
+def is_rag_available() -> bool:
+    """
+    获取 RAG 服务可用性状态（同步方法）
+
+    Returns:
+        bool: RAG 服务是否可用，如果未检查过则返回 False
+    """
+    global _rag_available
+    return _rag_available if _rag_available is not None else False

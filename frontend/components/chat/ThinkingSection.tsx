@@ -3,17 +3,22 @@
 import { useState } from 'react'
 import { ChevronDown, ChevronRight, Brain, Sparkles } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import type { ThinkingLogEntry } from '@/lib/api/analysis'
 
 interface ThinkingSectionProps {
   content: string
   isLoading?: boolean
+  logs?: ThinkingLogEntry[]  // 累积的思考日志
 }
 
-export function ThinkingSection({ content, isLoading = false }: ThinkingSectionProps) {
+export function ThinkingSection({ content, isLoading = false, logs = [] }: ThinkingSectionProps) {
   const [isExpanded, setIsExpanded] = useState(false)
 
-  // 如果没有内容且不在加载中，不显示
-  if (!content && !isLoading) return null
+  // 如果没有内容且不在加载中且没有日志，不显示
+  if (!content && !isLoading && logs.length === 0) return null
+
+  // 计算总内容长度
+  const totalLength = content.length + logs.reduce((acc, log) => acc + log.content.length, 0)
 
   return (
     <div className="glass rounded-xl border border-white/5 overflow-hidden">
@@ -40,9 +45,9 @@ export function ThinkingSection({ content, isLoading = false }: ThinkingSectionP
           )}
         </div>
         <div className="flex items-center gap-2">
-          {content && (
+          {totalLength > 0 && (
             <span className="text-xs text-gray-500">
-              {content.length} 字
+              {totalLength} 字
             </span>
           )}
           {isExpanded ? (
@@ -57,19 +62,47 @@ export function ThinkingSection({ content, isLoading = false }: ThinkingSectionP
       <div
         className={cn(
           "overflow-hidden transition-all duration-300 ease-in-out",
-          isExpanded ? "max-h-96 opacity-100" : "max-h-0 opacity-0"
+          isExpanded ? "max-h-[500px] opacity-100" : "max-h-0 opacity-0"
         )}
       >
-        <div className="px-4 py-3 border-t border-white/5">
-          <div className="text-sm text-gray-400 leading-relaxed whitespace-pre-wrap overflow-y-auto max-h-80">
-            {content || (
-              <span className="text-gray-500 italic">正在分析...</span>
-            )}
-            {/* 闪烁光标效果 - 仅在加载时显示 */}
-            {isLoading && (
-              <span className="inline-block w-2 h-4 ml-0.5 bg-violet-400/70 animate-pulse" />
-            )}
-          </div>
+        <div className="px-4 py-3 border-t border-white/5 overflow-y-auto max-h-[480px]">
+          {/* 流式思考内容（意图识别） */}
+          {content && (
+            <div className="mb-4">
+              <div className="text-xs font-medium text-violet-400 mb-1.5 flex items-center gap-1.5">
+                <span className="w-1.5 h-1.5 bg-violet-400 rounded-full" />
+                意图识别
+              </div>
+              <div className="text-sm text-gray-400 leading-relaxed whitespace-pre-wrap bg-dark-700/30 rounded-lg p-3">
+                {content}
+                {/* 闪烁光标效果 - 仅在加载时显示 */}
+                {isLoading && logs.length === 0 && (
+                  <span className="inline-block w-2 h-4 ml-0.5 bg-violet-400/70 animate-pulse" />
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* 累积的思考日志（各步骤 LLM 输出） */}
+          {logs.map((log, index) => (
+            <div key={`${log.step_id}-${index}`} className="mb-4 last:mb-0">
+              <div className="text-xs font-medium text-violet-400 mb-1.5 flex items-center gap-1.5">
+                <span className="w-1.5 h-1.5 bg-violet-400 rounded-full" />
+                {log.step_name}
+              </div>
+              <div className="text-sm text-gray-400 leading-relaxed whitespace-pre-wrap bg-dark-700/30 rounded-lg p-3">
+                {log.content}
+              </div>
+            </div>
+          ))}
+
+          {/* 加载状态（没有任何内容时） */}
+          {!content && logs.length === 0 && isLoading && (
+            <div className="text-sm text-gray-500 italic flex items-center gap-2">
+              <span>正在分析...</span>
+              <span className="inline-block w-2 h-4 bg-violet-400/70 animate-pulse" />
+            </div>
+          )}
         </div>
       </div>
     </div>

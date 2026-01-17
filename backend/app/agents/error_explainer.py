@@ -5,14 +5,8 @@ Error Explainer Agent 模块
 负责将技术错误转换为用户友好的解释
 """
 
-from typing import Dict, Any
 from openai import OpenAI
-import sys
-import os
-
-# 添加父目录到路径以导入 DataFetchError
-sys.path.append(os.path.dirname(os.path.dirname(__file__)))
-from data.fetcher import DataFetchError
+from app.data.fetcher import DataFetchError
 
 
 class ErrorExplainerAgent:
@@ -89,13 +83,12 @@ class ErrorExplainerAgent:
                 model="deepseek-chat",
                 messages=[
                     {
-                        "role": "system", 
+                        "role": "system",
                         "content": "你是小易，一个专业且友好的金融分析助手。你擅长用简单易懂的方式解释技术问题，并给出实用建议。"
                     },
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0.7,
-                max_tokens=600
             )
             
             return response.choices[0].message.content
