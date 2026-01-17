@@ -212,6 +212,7 @@ class SessionData(BaseModel):
     """
     # 基础信息
     session_id: str
+    title: str = "New Chat"  # 会话标题，默认为首条消息摘要
     created_at: str
     updated_at: str
 

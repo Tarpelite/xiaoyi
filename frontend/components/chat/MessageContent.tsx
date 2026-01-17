@@ -9,18 +9,48 @@ import type { TextContent, ChartContent, TableContent } from './ChatArea'
 import { useBacktestSimulation } from '@/hooks/useBacktestSimulation'
 import { BacktestControls } from './BacktestControls'
 import type { TimeSeriesPoint } from '@/lib/api/analysis'
+import rehypeRaw from 'rehype-raw'
+
 
 interface MessageContentProps {
   content: TextContent | ChartContent | TableContent
 }
 
+// 预处理 markdown 文本，确保带正负号的数字加粗能正确解析
+function preprocessMarkdown(text: string): string {
+  let processed = text
+
+  // 全角归一化
+  processed = processed.replace(/＋/g, '+').replace(/－/g, '-')
+
+  // 🚀 直接把 **+3.70%** 变成 <strong>+3.70%</strong>
+  processed = processed.replace(
+    /\*\*\s*([+-]\d+(?:\.\d+)?[%元]?)\s*\*\*/g,
+    '<strong>$1</strong>'
+  )
+
+  return processed
+}
+
+
+
+
 export function MessageContent({ content }: MessageContentProps) {
   if (content.type === 'text') {
+    // 预处理文本，确保加粗格式正确
+    const processedText = preprocessMarkdown(content.text)
+    
     return (
       <div className="prose prose-invert max-w-none">
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
+          rehypePlugins={[rehypeRaw]}
           components={{
+            strong: ({ children }) => (
+              <strong className="font-semibold text-violet-300">
+                {children}
+              </strong>
+            ),
             // 标题
             h1: ({ children }) => <h1 className="text-2xl font-bold text-gray-200 mb-3 mt-4 first:mt-0">{children}</h1>,
             h2: ({ children }) => <h2 className="text-xl font-bold text-gray-200 mb-2 mt-4 first:mt-0">{children}</h2>,
@@ -30,8 +60,6 @@ export function MessageContent({ content }: MessageContentProps) {
             h6: ({ children }) => <h6 className="text-sm font-medium text-gray-300 mb-1 mt-2 first:mt-0">{children}</h6>,
             // 段落
             p: ({ children }) => <p className="mb-2 last:mb-0 text-gray-300 leading-relaxed">{children}</p>,
-            // 强调
-            strong: ({ children }) => <strong className="font-semibold text-violet-300">{children}</strong>,
             em: ({ children }) => <em className="italic text-gray-200">{children}</em>,
             // 列表
             ul: ({ children }) => <ul className="list-disc list-inside mb-2 space-y-1 text-gray-300">{children}</ul>,
@@ -125,7 +153,7 @@ export function MessageContent({ content }: MessageContentProps) {
             br: () => <br />,
           }}
         >
-          {content.text}
+          {processedText}
         </ReactMarkdown>
       </div>
     )
@@ -352,7 +380,8 @@ function InteractiveChart({ content }: { content: ChartContent }) {
 
   // 图表容器引用
   const chartContainerRef = useRef<HTMLDivElement>(null)
-  const [mouseY, setMouseY] = useState<number | null>(null) // 鼠标实际Y坐标（像素）
+  const [mouseY, setMouseY] = useState<number | null>(null) // 鼠标相对于绘图区域的Y坐标（像素）
+  const [plotAreaBounds, setPlotAreaBounds] = useState<{ top: number; height: number } | null>(null) // 绘图区域边界
 
   // 计算当前显示的数据
   const displayData = useMemo(() => {
@@ -470,16 +499,88 @@ function InteractiveChart({ content }: { content: ChartContent }) {
     }
   }, [handleWheel])
 
-  // 原生鼠标跟踪获取真实Y坐标
+  // 获取绘图区域边界（排除图例和边距）
   useEffect(() => {
     const container = chartContainerRef.current
     if (!container) return
 
+    const updatePlotAreaBounds = () => {
+      // 查找 SVG 元素（Recharts 会在容器内创建 SVG）
+      const svg = container.querySelector('svg')
+      if (!svg) return
+
+      const containerRect = container.getBoundingClientRect()
+      const svgRect = svg.getBoundingClientRect()
+      
+      // 查找 X 轴和 Y 轴的实际位置来确定绘图区域
+      const xAxis = svg.querySelector('.recharts-cartesian-axis.xAxis')
+      const yAxis = svg.querySelector('.recharts-cartesian-axis.yAxis')
+      
+      // 如果找不到坐标轴，使用 margin 计算
+      if (!xAxis || !yAxis) {
+        const marginTop = 5
+        const marginBottom = 20
+        const legend = svg.querySelector('.recharts-legend-wrapper')
+        const legendHeight = legend ? legend.getBoundingClientRect().height : 0
+        
+        const plotTop = marginTop
+        const plotHeight = containerRect.height - marginTop - marginBottom - legendHeight
+        setPlotAreaBounds({ top: plotTop, height: plotHeight })
+        return
+      }
+
+      // 获取坐标轴的实际位置
+      const xAxisRect = xAxis.getBoundingClientRect()
+      const yAxisRect = yAxis.getBoundingClientRect()
+      
+      // 绘图区域从 Y 轴顶部开始，到 X 轴顶部结束
+      // 计算相对于容器顶部的偏移
+      const plotTop = yAxisRect.top - containerRect.top
+      const plotBottom = xAxisRect.top - containerRect.top
+      const plotHeight = plotBottom - plotTop
+      
+      if (plotHeight > 0) {
+        setPlotAreaBounds({ top: plotTop, height: plotHeight })
+      }
+    }
+
+    // 初始化时获取边界
+    const timer = setTimeout(updatePlotAreaBounds, 100)
+    
+    // 监听窗口大小变化
+    window.addEventListener('resize', updatePlotAreaBounds)
+    
+    // 使用 MutationObserver 监听 DOM 变化（图表渲染完成）
+    const observer = new MutationObserver(updatePlotAreaBounds)
+    observer.observe(container, { childList: true, subtree: true })
+
+    return () => {
+      clearTimeout(timer)
+      window.removeEventListener('resize', updatePlotAreaBounds)
+      observer.disconnect()
+    }
+  }, [chartData, viewStartIndex, viewEndIndex, isZoomed])
+
+  // 原生鼠标跟踪获取真实Y坐标（仅在绘图区域内）
+  useEffect(() => {
+    const container = chartContainerRef.current
+    if (!container || !plotAreaBounds) return
+
     const handleMouseMove = (e: MouseEvent) => {
-      const rect = container.getBoundingClientRect()
-      const y = e.clientY - rect.top
-      if (y >= 0 && y <= rect.height) {
-        setMouseY(y)
+      const containerRect = container.getBoundingClientRect()
+      const mouseYRelativeToContainer = e.clientY - containerRect.top
+      
+      // 检查鼠标是否在绘图区域内
+      const plotAreaTop = plotAreaBounds.top
+      const plotAreaBottom = plotAreaTop + plotAreaBounds.height
+      
+      if (mouseYRelativeToContainer >= plotAreaTop && mouseYRelativeToContainer <= plotAreaBottom) {
+        // 计算相对于绘图区域顶部的坐标
+        const yInPlotArea = mouseYRelativeToContainer - plotAreaTop
+        setMouseY(yInPlotArea)
+      } else {
+        // 鼠标不在绘图区域内，不显示虚线
+        setMouseY(null)
       }
     }
 
@@ -492,7 +593,7 @@ function InteractiveChart({ content }: { content: ChartContent }) {
       container.removeEventListener('mousemove', handleMouseMove)
       container.removeEventListener('mouseleave', handleMouseLeave)
     }
-  }, [])
+  }, [plotAreaBounds])
 
   // 重置视图
   const handleReset = useCallback(() => {
@@ -603,15 +704,12 @@ function InteractiveChart({ content }: { content: ChartContent }) {
               wrapperStyle={{ fontSize: '12px' }}
             />
             {/* 鼠标跟随的水平参考线 */}
-            {mouseY !== null && chartContainerRef.current && (() => {
-              const rect = chartContainerRef.current!.getBoundingClientRect()
-              const chartHeight = rect.height  // 动态获取实际高度
-              const marginTop = 5
-              const marginBottom = 20
-              const effectiveHeight = chartHeight - marginTop - marginBottom
-
-              const adjustedY = mouseY - marginTop
-              const dataValue = yAxisDomain[1] - (adjustedY / effectiveHeight) * (yAxisDomain[1] - yAxisDomain[0])
+            {mouseY !== null && plotAreaBounds && (() => {
+              // mouseY 已经是相对于绘图区域顶部的坐标
+              const effectiveHeight = plotAreaBounds.height
+              
+              // 计算对应的数据值
+              const dataValue = yAxisDomain[1] - (mouseY / effectiveHeight) * (yAxisDomain[1] - yAxisDomain[0])
 
               return (
                 <ReferenceLine

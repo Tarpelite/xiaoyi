@@ -62,3 +62,6 @@ xiaoyi-rag-service/
 
 # Claude settings
 .claude/
+
+# TypeScript build info
+/frontend/tsconfig.tsbuildinfo

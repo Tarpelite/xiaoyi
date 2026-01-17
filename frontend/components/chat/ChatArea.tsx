@@ -144,11 +144,15 @@ function getOrCreateSessionId(): string {
   return newSessionId
 }
 
-export function ChatArea() {
+interface ChatAreaProps {
+  sessionId: string | null
+}
+
+export function ChatArea({ sessionId: externalSessionId }: ChatAreaProps) {
   const [messages, setMessages] = useState<Message[]>([])
   const [inputValue, setInputValue] = useState('')
   const [isLoading, setIsLoading] = useState(false)
-  const [sessionId, setSessionId] = useState<string>(() => getOrCreateSessionId())
+  const [sessionId, setSessionId] = useState<string>(() => externalSessionId || getOrCreateSessionId())
   const [quickSuggestions, setQuickSuggestions] = useState<string[]>(defaultQuickSuggestions)
 
   // 对话模式动画状态 (针对最后一条消息)
@@ -163,6 +167,10 @@ export function ChatArea() {
 
   // 防止 React 严格模式下重复加载历史
   const historyLoadedRef = useRef(false)
+
+  // 跟踪当前活跃的轮询消息（支持多会话并发）
+  // Key: sessionId, Value: messageId
+  const activePollingMapRef = useRef<Map<string, string>>(new Map())
 
   // 自动滚动到底部
   const scrollToBottom = () => {
@@ -229,6 +237,33 @@ export function ChatArea() {
     return history
   }
 
+  // 当外部 sessionId 变化时，更新内部状态
+  useEffect(() => {
+    // 只在真正切换会话时才处理（externalSessionId变化）
+    // 不处理内部sessionId的自然更新（如发送首条消息时）
+    if (externalSessionId && externalSessionId !== sessionId) {
+      console.log('[ChatArea] Switching to session:', externalSessionId)
+      setSessionId(externalSessionId)
+      // 不立即清空messages，让loadSessionHistory处理
+      historyLoadedRef.current = false
+      // 清除这个会话的轮询跟踪（但不影响其他会话）
+      if (sessionId) {
+        activePollingMapRef.current.delete(sessionId)
+      }
+    } else if (externalSessionId === null && sessionId) {
+      // 新建会话（用户点击New Chat）
+      console.log('[ChatArea] Creating new session')
+      const newSessionId = getOrCreateSessionId()
+      setSessionId(newSessionId)
+      setMessages([]) // 新会话才清空
+      historyLoadedRef.current = false
+      // 清除旧会话的轮询跟踪
+      if (sessionId) {
+        activePollingMapRef.current.delete(sessionId)
+      }
+    }
+  }, [externalSessionId]) // 只监听externalSessionId，不监听sessionId
+
   // 页面加载时恢复会话历史
   useEffect(() => {
     const loadSessionHistory = async () => {
@@ -242,11 +277,11 @@ export function ChatArea() {
         const { getSessionHistory } = await import('@/lib/api/analysis')
         const history = await getSessionHistory(sessionId)
 
-        if (history && history.messages && history.messages.length > 0) {
-          // 将后端历史消息转换为前端 Message 格式
-          // 只加载已完成的消息，跳过 processing/pending 状态的消息
-          const loadedMessages: Message[] = []
+        // 将后端历史消息转换为前端 Message 格式
+        // 只加载已完成的消息，跳过 processing/pending 状态的消息
+        const loadedMessages: Message[] = []
 
+        if (history && history.messages && history.messages.length > 0) {
           for (const historyMsg of history.messages) {
             // 只处理已完成的消息
             if (historyMsg.status !== 'completed' || !historyMsg.data) {
@@ -283,18 +318,19 @@ export function ChatArea() {
               thinkingLogs: data.thinking_logs || [], // 思考日志
             })
           }
-
-          if (loadedMessages.length > 0) {
-            setMessages(loadedMessages)
-          }
         }
+
+        // 无论是否有历史，都更新messages（确保切换到空会话时清空）
+        setMessages(loadedMessages)
       } catch (error) {
         console.error('加载会话历史失败:', error)
+        // 加载失败时也清空消息，避免显示错误的内容
+        setMessages([])
       }
     }
 
     loadSessionHistory()
-  }, []) // 只在组件挂载时执行一次
+  }, [sessionId]) // 依赖 sessionId，当 sessionId 变化时重新加载
 
   // 更新快速追问建议（在对话完成后）
   useEffect(() => {
@@ -617,6 +653,10 @@ export function ChatArea() {
         localStorage.setItem('chat_session_id', currentSessionId)
       }
 
+      // 设置当前活跃的轮询任务（支持多会话）
+      activePollingMapRef.current.set(currentSessionId, currentMessageId)
+      console.log('[ChatArea] Started polling for session:', currentSessionId, 'message:', currentMessageId)
+
       // 阶段2: 流结束后，查询一次状态判断是否需要轮询
       const initialStatus = await getAnalysisStatus(currentSessionId, currentMessageId)
 
@@ -645,6 +685,12 @@ export function ChatArea() {
           currentSessionId,
           currentMessageId,
           (statusResponse) => {
+            // 检查这个轮询是否还是active的（避免切换会话后继续更新）
+            const activeMessageId = activePollingMapRef.current.get(currentSessionId)
+            if (activeMessageId !== currentMessageId) {
+              console.log('[Poll] Skipping update for session:', currentSessionId, 'message:', currentMessageId, 'active:', activeMessageId)
+              return
+            }
             const { data, steps: currentStep, status } = statusResponse
 
             // DEBUG: 输出轮询响应数据
@@ -813,9 +859,23 @@ export function ChatArea() {
           </div>
         ) : (
           /* 消息列表 */
-          messages.map((message: Message) => (
+          messages.map((message: Message, index: number) => (
             <div key={message.id}>
-              <MessageBubble message={message} />
+              <MessageBubble
+                message={message}
+                onRegenerateMessage={message.role === 'assistant' ? () => {
+                  // 找到对应的用户消息（前一条）
+                  const userMessage = index > 0 ? messages[index - 1] : null
+                  if (userMessage && userMessage.role === 'user' && userMessage.text) {
+                    // 删除当前这对QA消息
+                    setMessages(prev => prev.filter((_, i) => i !== index && i !== index - 1))
+                    // 重新发送用户消息
+                    setTimeout(() => {
+                      handleSend(userMessage.text)
+                    }, 100)
+                  }
+                } : undefined}
+              />
               {/* 如果有分析结果，显示分析卡片 */}
               {message.analysis && (
                 <div className="mt-4 ml-13">

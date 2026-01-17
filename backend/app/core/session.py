@@ -363,3 +363,24 @@ class Session:
             if len(data.conversation_history) > 20:
                 data.conversation_history = data.conversation_history[-20:]
             self._save(data)
+
+    # ========== Session 元数据管理 ==========
+
+    def update_title(self, new_title: str):
+        """更新会话标题"""
+        data = self.get()
+        if data:
+            data.title = new_title
+            self._save(data)
+            print(f"[Session] Title updated: {new_title}")
+
+    def auto_generate_title(self, first_message: str):
+        """从首条消息自动生成标题（截断到50字符）"""
+        data = self.get()
+        if data and data.title == "New Chat":  # 只在默认标题时自动生成
+            title = first_message[:50]
+            if len(first_message) > 50:
+                title += "..."
+            data.title = title
+            self._save(data)
+            print(f"[Session] Auto-generated title: {title}")
