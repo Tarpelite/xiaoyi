@@ -9,18 +9,48 @@ import type { TextContent, ChartContent, TableContent } from './ChatArea'
 import { useBacktestSimulation } from '@/hooks/useBacktestSimulation'
 import { BacktestControls } from './BacktestControls'
 import type { TimeSeriesPoint } from '@/lib/api/analysis'
+import rehypeRaw from 'rehype-raw'
+
 
 interface MessageContentProps {
   content: TextContent | ChartContent | TableContent
 }
 
+// 预处理 markdown 文本，确保带正负号的数字加粗能正确解析
+function preprocessMarkdown(text: string): string {
+  let processed = text
+
+  // 全角归一化
+  processed = processed.replace(/＋/g, '+').replace(/－/g, '-')
+
+  // 🚀 直接把 **+3.70%** 变成 <strong>+3.70%</strong>
+  processed = processed.replace(
+    /\*\*\s*([+-]\d+(?:\.\d+)?[%元]?)\s*\*\*/g,
+    '<strong>$1</strong>'
+  )
+
+  return processed
+}
+
+
+
+
 export function MessageContent({ content }: MessageContentProps) {
   if (content.type === 'text') {
+    // 预处理文本，确保加粗格式正确
+    const processedText = preprocessMarkdown(content.text)
+    
     return (
       <div className="prose prose-invert max-w-none">
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
+          rehypePlugins={[rehypeRaw]}
           components={{
+            strong: ({ children }) => (
+              <strong className="font-semibold text-violet-300">
+                {children}
+              </strong>
+            ),
             // 标题
             h1: ({ children }) => <h1 className="text-2xl font-bold text-gray-200 mb-3 mt-4 first:mt-0">{children}</h1>,
             h2: ({ children }) => <h2 className="text-xl font-bold text-gray-200 mb-2 mt-4 first:mt-0">{children}</h2>,
@@ -30,8 +60,6 @@ export function MessageContent({ content }: MessageContentProps) {
             h6: ({ children }) => <h6 className="text-sm font-medium text-gray-300 mb-1 mt-2 first:mt-0">{children}</h6>,
             // 段落
             p: ({ children }) => <p className="mb-2 last:mb-0 text-gray-300 leading-relaxed">{children}</p>,
-            // 强调
-            strong: ({ children }) => <strong className="font-semibold text-violet-300">{children}</strong>,
             em: ({ children }) => <em className="italic text-gray-200">{children}</em>,
             // 列表
             ul: ({ children }) => <ul className="list-disc list-inside mb-2 space-y-1 text-gray-300">{children}</ul>,
@@ -125,7 +153,7 @@ export function MessageContent({ content }: MessageContentProps) {
             br: () => <br />,
           }}
         >
-          {content.text}
+          {processedText}
         </ReactMarkdown>
       </div>
     )
