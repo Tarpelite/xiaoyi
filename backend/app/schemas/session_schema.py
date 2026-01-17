@@ -183,6 +183,10 @@ class MessageData(BaseModel):
 
     # 模型配置
     model_name: str = "prophet"
+    
+    # ===== SSE流式字段 (Phase 1新增) =====
+    thinking_content: str = ""  # 思考过程完整内容 (SSE streaming)
+    chat_response: Optional[str] = None  # 纯聊天回复 (非预测时)
 
     # 时序数据 (仅预测)
     time_series_original: List[TimeSeriesPoint] = Field(default_factory=list)

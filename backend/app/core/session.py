@@ -94,12 +94,22 @@ class Message:
 
     # ========== 意图相关 ==========
 
-    def save_unified_intent(self, intent: UnifiedIntent):
-        """保存统一意图识别结果"""
+    def save_unified_intent(self, intent: UnifiedIntent, thinking_content: str = ""):
+        """
+        保存统一意图识别结果
+        
+        Args:
+            intent: 意图识别结果
+            thinking_content: 思考过程内容 (用于SSE流式)
+        """
         data = self.get()
         if data:
             data.unified_intent = intent
             data.is_forecast = intent.is_forecast
+            
+            # 保存thinking内容 (SSE streaming支持)
+            if thinking_content:
+                data.thinking_content = thinking_content
 
             # 设置 intent 字段
             if not intent.is_in_scope:

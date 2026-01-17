@@ -549,195 +549,138 @@ export function ChatArea({ sessionId: externalSessionId }: ChatAreaProps) {
   }
 
   const handleSend = async (messageOverride?: string) => {
-    const messageToSend = messageOverride || inputValue
-    if (!messageToSend.trim() || isLoading) return
+      const messageToSend = messageOverride || inputValue
+      if (!messageToSend.trim() || isLoading) return
 
-    const userMessage: Message = {
-      id: Date.now().toString(),
-      role: 'user',
-      text: messageToSend,
-      timestamp: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
-    }
-
-    setMessages((prev: Message[]) => [...prev, userMessage])
-    setInputValue('')
-    setIsLoading(true)
-
-    // 发送消息后滚动一次
-    setTimeout(scrollToBottom, 50)
-
-    // 重置滚动标记，准备在收到内容时再滚动一次
-    hasScrolledForContentRef.current = false
-
-    // 创建AI消息占位符（清空旧内容）
-    const assistantMessageId = (Date.now() + 1).toString()
-    const assistantMessage: Message = {
-      id: assistantMessageId,
-      role: 'assistant',
-      timestamp: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
-      contents: [], // 初始为空数组，避免显示旧内容
-      renderMode: 'thinking', // 初始为思考中状态
-    }
-
-    setMessages((prev: Message[]) => [...prev, assistantMessage])
-
-    try {
-      // 使用 analysis API - 流式获取思考内容
-      const { streamAnalysisTask, pollAnalysisStatus, getAnalysisStatus } = await import('@/lib/api/analysis')
-
-      // 阶段1: 使用 SSE 流式获取思考内容
-      const { session_id: currentSessionId, message_id: currentMessageId } = await streamAnalysisTask(
-        messageToSend,
-        {
-          // 实时更新思考内容
-          onThinking: (content: string) => {
-            // 第一次收到内容时滚动一次
-            if (!hasScrolledForContentRef.current && content.length > 0) {
-              hasScrolledForContentRef.current = true
-              setTimeout(scrollToBottom, 50)
-            }
-            setMessages((prev: Message[]) => prev.map((msg: Message) =>
-              msg.id === assistantMessageId
-                ? { ...msg, thinkingContent: content }
-                : msg
-            ))
-          },
-          // 收到意图后更新渲染模式
-          onIntent: (intent: string, isForecast: boolean) => {
-            const renderMode: RenderMode = isForecast ? 'forecast' : 'chat'
-            setMessages((prev: Message[]) => prev.map((msg: Message) =>
-              msg.id === assistantMessageId
-                ? { ...msg, renderMode }
-                : msg
-            ))
-          },
-          // 错误处理
-          onError: (errorMsg: string) => {
-            console.error('Stream error:', errorMsg)
-          }
-        },
-        'prophet',
-        '',
-        sessionId
-      )
-
-      // 更新 sessionId（首次创建或复用）
-      setSessionId(currentSessionId)
-      if (typeof window !== 'undefined') {
-        localStorage.setItem('chat_session_id', currentSessionId)
+      // Create user message
+      const userMessage: Message = {
+          id: Date.now().toString(),
+          role: 'user',
+          text: messageToSend,
+          timestamp: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
       }
 
-      // 设置当前活跃的轮询任务（支持多会话）
-      activePollingMapRef.current.set(currentSessionId, currentMessageId)
-      console.log('[ChatArea] Started polling for session:', currentSessionId, 'message:', currentMessageId)
+      setMessages((prev: Message[]) => [...prev, userMessage])
+      setInputValue('')
+      setIsLoading(true)
 
-      // 阶段2: 流结束后，查询一次状态判断是否需要轮询
-      const initialStatus = await getAnalysisStatus(currentSessionId, currentMessageId)
+      setTimeout(scrollToBottom, 50)
+      hasScrolledForContentRef.current = false
 
-      // 如果任务已完成（如简单问答），直接显示结果
-      if (initialStatus.status === 'completed') {
-        const { data } = initialStatus
+      try {
+          const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+          const currentSessionId = sessionId || `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
 
-        // 简单问答：只显示文本内容，renderMode 为 chat
-        setMessages((prev: Message[]) => prev.map((msg: Message) =>
-          msg.id === assistantMessageId
-            ? {
-              ...msg,
-              contents: [{
-                type: 'text',
-                text: data.conclusion || '已收到回答'
-              }],
-              steps: undefined,
-              renderMode: 'chat' as RenderMode
-            }
-            : msg
-        ))
-      } else {
-        // 轮询状态（使用 message_id 确保轮询正确的消息）
-        await pollAnalysisStatus(
-          currentSessionId,
-          currentMessageId,
-          (statusResponse) => {
-            // 检查这个轮询是否还是active的（避免切换会话后继续更新）
-            const activeMessageId = activePollingMapRef.current.get(currentSessionId)
-            if (activeMessageId !== currentMessageId) {
-              console.log('[Poll] Skipping update for session:', currentSessionId, 'message:', currentMessageId, 'active:', activeMessageId)
-              return
-            }
-            const { data, steps: currentStep, status } = statusResponse
-
-            // 🎯 根据后端返回的 intent 决定渲染模式
-            const isForecastIntent = data.intent === 'forecast' ||
-              (data.unified_intent && data.unified_intent.is_forecast)
-
-            // 确定渲染模式
-            let currentRenderMode: RenderMode = 'thinking'
-            if (data.intent && data.intent !== 'pending') {
-              currentRenderMode = isForecastIntent ? 'forecast' : 'chat'
-            }
-
-            // 判断是否是简单问答（非 forecast 意图，只有 conclusion）
-            const isSimpleAnswer = !isForecastIntent && status === 'completed' && data.conclusion
-
-            if (isSimpleAnswer) {
-              // 简单问答：只显示文本内容，renderMode 为 chat
-              setMessages((prev: Message[]) => prev.map((msg: Message) =>
-                msg.id === assistantMessageId
-                  ? {
-                    ...msg,
-                    contents: [{
-                      type: 'text',
-                      text: data.conclusion
-                    }],
-                    steps: undefined,
-                    renderMode: 'chat' as RenderMode
-                  }
-                  : msg
-              ))
-            } else {
-              // 预测分析：显示完整分析结果
-              // 转换步骤
-              const steps = convertSteps(currentStep, data.total_steps || 6, status)
-
-              // 转换内容（传入当前步骤和状态，只显示已完成步骤的内容）
-              const contents = convertAnalysisToContents(data, currentStep, status)
-
-              // 更新消息（保留 thinkingContent）
-              setMessages((prev: Message[]) => prev.map((msg: Message) =>
-                msg.id === assistantMessageId
-                  ? {
-                    ...msg,
-                    steps: status === 'completed' ? undefined : steps, // 完成后隐藏步骤
-                    contents: contents.length > 0 ? contents : [], // 清空旧内容，避免显示上次的数据
-                    renderMode: currentRenderMode // 根据 intent 设置渲染模式
-                  }
-                  : msg
-              ))
-            }
-          },
-          500 // 轮询间隔 500ms (推荐)
-        )
-      }
-
-    } catch (error) {
-      console.error('发送消息失败:', error)
-      // 更新消息显示错误
-      setMessages((prev: Message[]) => prev.map((msg: Message) =>
-        msg.id === assistantMessageId
-          ? {
-            ...msg,
-            contents: [{
-              type: 'text',
-              text: '抱歉，处理请求时出现错误，请稍后重试。'
-            }],
-            steps: undefined
+          if (!sessionId) {
+              setSessionId(currentSessionId)
+              if (typeof window !== 'undefined') {
+                  localStorage.setItem('chat_session_id', currentSessionId)
+              }
           }
-          : msg
-      ))
-    } finally {
-      setIsLoading(false)
-    }
+
+          // 🚀 Step 1: Trigger background worker
+          console.log('[Pub/Sub] Triggering worker...')
+          const startResponse = await fetch(
+              `${API_BASE}/api/v2/analysis/start?message=${encodeURIComponent(messageToSend)}&session_id=${currentSessionId}&model=prophet&context=`
+          )
+
+          if (!startResponse.ok) {
+              throw new Error('Failed to start analysis')
+          }
+
+          const { message_id: currentMessageId } = await startResponse.json()
+          console.log('[Pub/Sub] Worker started, message_id:', currentMessageId)
+
+          // Create assistant message placeholder
+          const assistantMessageId = `assistant-${currentMessageId}`
+          const assistantMessage: Message = {
+              id: assistantMessageId,
+              role: 'assistant',
+              timestamp: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
+              contents: [],
+              renderMode: 'thinking',
+          }
+
+          setMessages((prev: Message[]) => [...prev, assistantMessage])
+
+          // 🎧 Step 2: Subscribe to SSE stream
+          console.log('[Pub/Sub] Subscribing to stream...')
+          const sseUrl = `${API_BASE}/api/v2/stream/subscribe/${currentMessageId}?session_id=${currentSessionId}`
+          const eventSource = new EventSource(sseUrl)
+
+          // Handle thinking chunks
+          eventSource.addEventListener('thinking_chunk', (event: MessageEvent) => {
+              const data = JSON.parse(event.data)
+              const thinkingContent = data.accumulated || data.data?.accumulated || ''
+
+              if (!hasScrolledForContentRef.current && thinkingContent.length > 0) {
+                  hasScrolledForContentRef.current = true
+                  setTimeout(scrollToBottom, 50)
+              }
+
+              setMessages((prev: Message[]) => prev.map((msg: Message) =>
+                  msg.id === assistantMessageId
+                      ? { ...msg, thinkingContent }
+                      : msg
+              ))
+          })
+
+          // Handle thinking complete
+          eventSource.addEventListener('thinking_complete', (event: MessageEvent) => {
+              console.log('[Pub/Sub] Thinking complete')
+          })
+
+          // Handle intent determined
+          eventSource.addEventListener('intent_determined', (event: MessageEvent) => {
+              const data = JSON.parse(event.data)
+              const isForecast = data.is_forecast || data.data?.is_forecast || false
+              const renderMode: RenderMode = isForecast ? 'forecast' : 'chat'
+
+              console.log('[Pub/Sub] Intent determined:', renderMode)
+              setMessages((prev: Message[]) => prev.map((msg: Message) =>
+                  msg.id === assistantMessageId
+                      ? { ...msg, renderMode }
+                      : msg
+              ))
+          })
+
+          // Handle analysis complete
+          eventSource.addEventListener('analysis_complete', () => {
+              console.log('[Pub/Sub] Analysis complete')
+              eventSource.close()
+              setIsLoading(false)
+
+              // Reload to get final results
+              setTimeout(() => {
+                  window.location.reload()
+              }, 1000)
+          })
+
+          // Handle errors
+          eventSource.addEventListener('error', (event: MessageEvent) => {
+              console.error('[Pub/Sub] Error event:', event)
+          })
+
+          eventSource.onerror = (error) => {
+              console.error('[Pub/Sub] SSE connection error:', error)
+              eventSource.close()
+              setIsLoading(false)
+          }
+
+      } catch (error) {
+          console.error('[ChatArea] Error:', error)
+          setIsLoading(false)
+          // Show error message
+          const errorMessage: Message = {
+              id: (Date.now() + 1).toString(),
+              role: 'assistant',
+              text: `抱歉，发生错误：${error instanceof Error ? error.message : '未知错误'}`,
+              timestamp: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
+          }
+          setMessages((prev: Message[]) => [...prev, errorMessage])
+      }
   }
+
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
