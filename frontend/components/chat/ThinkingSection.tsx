@@ -1,4 +1,4 @@
-'use client'
+x x'use client'
 
 import { useState } from 'react'
 import { ChevronDown, ChevronRight, Brain, Sparkles } from 'lucide-react'
@@ -10,7 +10,7 @@ interface ThinkingSectionProps {
 }
 
 export function ThinkingSection({ content, isLoading = false }: ThinkingSectionProps) {
-  const [isExpanded, setIsExpanded] = useState(false)
+  const [isExpanded, setIsExpanded] = useState(true) // ✅ 默认展开
 
   // 如果没有内容且不在加载中，不显示
   if (!content && !isLoading) return null

@@ -262,6 +262,7 @@ export function ChatArea({ sessionId: externalSessionId }: ChatAreaProps) {
   // 页面加载时恢复会话历史
   useEffect(() => {
     const loadSessionHistory = async () => {
+      console.log("🔄 [loadSessionHistory] CALLED", { sessionId })
       // 防止 React 严格模式下重复加载
       if (historyLoadedRef.current) return
       historyLoadedRef.current = true
@@ -269,54 +270,149 @@ export function ChatArea({ sessionId: externalSessionId }: ChatAreaProps) {
       if (!sessionId) return
 
       try {
+        console.log('[loadSessionHistory] Fetching history for session:', sessionId)
         const { getSessionHistory } = await import('@/lib/api/analysis')
         const history = await getSessionHistory(sessionId)
+        console.log('[loadSessionHistory] Got history:', history)
 
         // 将后端历史消息转换为前端 Message 格式
-        // 只加载已完成的消息，跳过 processing/pending 状态的消息
         const loadedMessages: Message[] = []
+        let processingMessageId: string | null = null
+        let processingSessionId: string | null = null
 
         if (history && history.messages && history.messages.length > 0) {
           for (const historyMsg of history.messages) {
-            // 只处理已完成的消息
-            if (historyMsg.status !== 'completed' || !historyMsg.data) {
-              continue
+            // 用户消息
+            if (historyMsg.user_query) {
+              loadedMessages.push({
+                id: `user-${historyMsg.message_id}`,
+                role: 'user',
+                text: historyMsg.user_query,
+                timestamp: new Date(historyMsg.created_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+              })
             }
 
-            const data = historyMsg.data
+            // 助手消息
+            if (historyMsg.status === 'completed' && historyMsg.data) {
+              const data = historyMsg.data
+              const isForecastIntent = data.intent === 'forecast' ||
+                (data.unified_intent && data.unified_intent.is_forecast)
 
-            // 添加用户消息
-            loadedMessages.push({
-              id: `user-${historyMsg.message_id}`,
-              role: 'user',
-              text: historyMsg.user_query,
-              timestamp: new Date(data.created_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
-            })
+              // 转换内容
+              const contents = convertAnalysisToContents(data, data.steps, 'completed')
 
-            // 添加助手消息
-            const isForecastIntent = data.intent === 'forecast' ||
-              (data.unified_intent && data.unified_intent.is_forecast)
+              loadedMessages.push({
+                id: `assistant-${historyMsg.message_id}`,
+                role: 'assistant',
+                timestamp: new Date(data.updated_at || data.created_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
+                contents: contents.length > 0 ? contents : [{
+                  type: 'text',
+                  text: data.conclusion || '已完成分析'
+                }],
+                renderMode: isForecastIntent ? 'forecast' : 'chat',
+              })
+            }
+            // 🆕 检测processing或pending状态的消息（都需要auto-resume）
+            else if (historyMsg.status === 'processing' || historyMsg.status === 'pending') {
+              console.log('[Auto-Resume] Found incomplete message:', historyMsg.message_id, 'status:', historyMsg.status)
+              console.log('[Auto-Resume] Message data:', historyMsg)
+              processingMessageId = historyMsg.message_id
+              processingSessionId = historyMsg.data.session_id
 
-            // 转换内容
-            const contents = convertAnalysisToContents(data, data.steps, 'completed')
-
-            loadedMessages.push({
-              id: `assistant-${historyMsg.message_id}`,
-              role: 'assistant',
-              timestamp: new Date(data.updated_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
-              contents: contents.length > 0 ? contents : [{
-                type: 'text',
-                text: data.conclusion || '已完成分析'
-              }],
-              renderMode: isForecastIntent ? 'forecast' : 'chat',
-            })
+              // 创建占位符消息
+              const assistantMessage: Message = {
+                id: `assistant-${historyMsg.message_id}`,
+                role: 'assistant',
+                timestamp: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
+                renderMode: 'thinking',
+                thinkingContent: historyMsg.thinking_content || ((historyMsg.data as any)?.thinking_content) || ''
+              }
+              console.log('[Auto-Resume] Created placeholder with thinking:', assistantMessage.thinkingContent?.length || 0, 'chars')
+              loadedMessages.push(assistantMessage)
+            }
           }
         }
 
-        // 无论是否有历史，都更新messages（确保切换到空会话时清空）
         setMessages(loadedMessages)
+
+        console.log("[Auto-Resume] Checking for reconnect:", { processingMessageId, processingSessionId })
+        // 🆕 Auto-resume: 如果发现processing消息，自动重连SSE
+        if (processingMessageId && processingSessionId) {
+          console.log('[Auto-Resume] Reconnecting to SSE for message:', processingMessageId)
+          setIsLoading(true)
+
+          // 订阅SSE流
+          const API_BASE = process.env.NEXT_PUBLIC_API_URL || ''
+          const sseUrl = `${API_BASE}/api/v2/stream/subscribe/${processingMessageId}?session_id=${processingSessionId}`
+          const eventSource = new EventSource(sseUrl)
+
+          const assistantMessageId = `assistant-${processingMessageId}`
+
+          // Thinking chunks
+          eventSource.addEventListener('thinking_chunk', (event: MessageEvent) => {
+            const data = JSON.parse(event.data)
+            const thinkingContent = data.accumulated || data.data?.accumulated || ''
+
+            setMessages((prev: Message[]) => prev.map((msg: Message) =>
+              msg.id === assistantMessageId
+                ? { ...msg, thinkingContent }
+                : msg
+            ))
+          })
+
+          // Intent determined
+          eventSource.addEventListener('intent_determined', (event: MessageEvent) => {
+            const data = JSON.parse(event.data)
+            const isForecast = data.is_forecast || data.data?.is_forecast || false
+            const renderMode: RenderMode = isForecast ? 'forecast' : 'chat'
+
+            setMessages((prev: Message[]) => prev.map((msg: Message) =>
+              msg.id === assistantMessageId
+                ? { ...msg, renderMode }
+                : msg
+            ))
+          })
+
+          // Analysis complete
+          eventSource.addEventListener('analysis_complete', async () => {
+            console.log('[Auto-Resume] Analysis complete')
+            eventSource.close()
+            setIsLoading(false)
+
+            // 获取最终结果
+            try {
+              const { getAnalysisStatus } = await import('@/lib/api/analysis')
+              const finalResult = await getAnalysisStatus(processingSessionId, processingMessageId)
+
+              const isForecast = finalResult.data?.is_forecast || finalResult.data?.unified_intent?.is_forecast || false
+              const conclusion = finalResult.data?.conclusion || (finalResult.data as any)?.chat_response || ''
+
+              setMessages((prev: Message[]) => prev.map((msg: Message) =>
+                msg.id === assistantMessageId
+                  ? {
+                    ...msg,
+                    contents: conclusion ? [{
+                      type: 'text' as const,
+                      text: conclusion
+                    }] : msg.contents || [],
+                    renderMode: isForecast ? 'forecast' : 'chat'
+                  }
+                  : msg
+              ))
+            } catch (error) {
+              console.error('[Auto-Resume] Failed to fetch final result:', error)
+            }
+          })
+
+          eventSource.onerror = () => {
+            console.error('[Auto-Resume] SSE error')
+            eventSource.close()
+            setIsLoading(false)
+          }
+        }
+
       } catch (error) {
-        console.error('加载会话历史失败:', error)
+        console.error('[ChatArea] Failed to load session history:', error)
         // 加载失败时也清空消息，避免显示错误的内容
         setMessages([])
       }
@@ -549,136 +645,179 @@ export function ChatArea({ sessionId: externalSessionId }: ChatAreaProps) {
   }
 
   const handleSend = async (messageOverride?: string) => {
-      const messageToSend = messageOverride || inputValue
-      if (!messageToSend.trim() || isLoading) return
+    const messageToSend = messageOverride || inputValue
+    if (!messageToSend.trim() || isLoading) return
 
-      // Create user message
-      const userMessage: Message = {
-          id: Date.now().toString(),
-          role: 'user',
-          text: messageToSend,
-          timestamp: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
+    // Create user message
+    const userMessage: Message = {
+      id: Date.now().toString(),
+      role: 'user',
+      text: messageToSend,
+      timestamp: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
+    }
+
+    setMessages((prev: Message[]) => [...prev, userMessage])
+    setInputValue('')
+    setIsLoading(true)
+
+    setTimeout(scrollToBottom, 50)
+    hasScrolledForContentRef.current = false
+
+    try {
+      const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+      const currentSessionId = sessionId || `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+
+      if (!sessionId) {
+        setSessionId(currentSessionId)
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('chat_session_id', currentSessionId)
+        }
       }
 
-      setMessages((prev: Message[]) => [...prev, userMessage])
-      setInputValue('')
-      setIsLoading(true)
+      // 🚀 Step 1: Trigger background worker
+      console.log('[Pub/Sub] Triggering worker...')
+      const startResponse = await fetch(
+        `${API_BASE}/api/v2/analysis/start?message=${encodeURIComponent(messageToSend)}&session_id=${currentSessionId}&model=prophet&context=`
+      )
 
-      setTimeout(scrollToBottom, 50)
-      hasScrolledForContentRef.current = false
-
-      try {
-          const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
-          const currentSessionId = sessionId || `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
-
-          if (!sessionId) {
-              setSessionId(currentSessionId)
-              if (typeof window !== 'undefined') {
-                  localStorage.setItem('chat_session_id', currentSessionId)
-              }
-          }
-
-          // 🚀 Step 1: Trigger background worker
-          console.log('[Pub/Sub] Triggering worker...')
-          const startResponse = await fetch(
-              `${API_BASE}/api/v2/analysis/start?message=${encodeURIComponent(messageToSend)}&session_id=${currentSessionId}&model=prophet&context=`
-          )
-
-          if (!startResponse.ok) {
-              throw new Error('Failed to start analysis')
-          }
-
-          const { message_id: currentMessageId } = await startResponse.json()
-          console.log('[Pub/Sub] Worker started, message_id:', currentMessageId)
-
-          // Create assistant message placeholder
-          const assistantMessageId = `assistant-${currentMessageId}`
-          const assistantMessage: Message = {
-              id: assistantMessageId,
-              role: 'assistant',
-              timestamp: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
-              contents: [],
-              renderMode: 'thinking',
-          }
-
-          setMessages((prev: Message[]) => [...prev, assistantMessage])
-
-          // 🎧 Step 2: Subscribe to SSE stream
-          console.log('[Pub/Sub] Subscribing to stream...')
-          const sseUrl = `${API_BASE}/api/v2/stream/subscribe/${currentMessageId}?session_id=${currentSessionId}`
-          const eventSource = new EventSource(sseUrl)
-
-          // Handle thinking chunks
-          eventSource.addEventListener('thinking_chunk', (event: MessageEvent) => {
-              const data = JSON.parse(event.data)
-              const thinkingContent = data.accumulated || data.data?.accumulated || ''
-
-              if (!hasScrolledForContentRef.current && thinkingContent.length > 0) {
-                  hasScrolledForContentRef.current = true
-                  setTimeout(scrollToBottom, 50)
-              }
-
-              setMessages((prev: Message[]) => prev.map((msg: Message) =>
-                  msg.id === assistantMessageId
-                      ? { ...msg, thinkingContent }
-                      : msg
-              ))
-          })
-
-          // Handle thinking complete
-          eventSource.addEventListener('thinking_complete', (event: MessageEvent) => {
-              console.log('[Pub/Sub] Thinking complete')
-          })
-
-          // Handle intent determined
-          eventSource.addEventListener('intent_determined', (event: MessageEvent) => {
-              const data = JSON.parse(event.data)
-              const isForecast = data.is_forecast || data.data?.is_forecast || false
-              const renderMode: RenderMode = isForecast ? 'forecast' : 'chat'
-
-              console.log('[Pub/Sub] Intent determined:', renderMode)
-              setMessages((prev: Message[]) => prev.map((msg: Message) =>
-                  msg.id === assistantMessageId
-                      ? { ...msg, renderMode }
-                      : msg
-              ))
-          })
-
-          // Handle analysis complete
-          eventSource.addEventListener('analysis_complete', () => {
-              console.log('[Pub/Sub] Analysis complete')
-              eventSource.close()
-              setIsLoading(false)
-
-              // Reload to get final results
-              setTimeout(() => {
-                  window.location.reload()
-              }, 1000)
-          })
-
-          // Handle errors
-          eventSource.addEventListener('error', (event: MessageEvent) => {
-              console.error('[Pub/Sub] Error event:', event)
-          })
-
-          eventSource.onerror = (error) => {
-              console.error('[Pub/Sub] SSE connection error:', error)
-              eventSource.close()
-              setIsLoading(false)
-          }
-
-      } catch (error) {
-          console.error('[ChatArea] Error:', error)
-          setIsLoading(false)
-          // Show error message
-          const errorMessage: Message = {
-              id: (Date.now() + 1).toString(),
-              role: 'assistant',
-              text: `抱歉，发生错误：${error instanceof Error ? error.message : '未知错误'}`,
-              timestamp: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
-          }
-          setMessages((prev: Message[]) => [...prev, errorMessage])
+      if (!startResponse.ok) {
+        throw new Error('Failed to start analysis')
       }
+
+      const { message_id: currentMessageId } = await startResponse.json()
+      console.log('[Pub/Sub] Worker started, message_id:', currentMessageId)
+
+      // Create assistant message placeholder
+      const assistantMessageId = `assistant-${currentMessageId}`
+      const assistantMessage: Message = {
+        id: assistantMessageId,
+        role: 'assistant',
+        timestamp: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
+        contents: [],
+        renderMode: 'thinking',
+      }
+
+      setMessages((prev: Message[]) => [...prev, assistantMessage])
+
+      // 🎧 Step 2: Subscribe to SSE stream
+      console.log('[Pub/Sub] Subscribing to stream...')
+      const sseUrl = `${API_BASE}/api/v2/stream/subscribe/${currentMessageId}?session_id=${currentSessionId}`
+      console.log('[Pub/Sub] SSE URL:', sseUrl)
+      const eventSource = new EventSource(sseUrl)
+
+      console.log('[Pub/Sub] EventSource created, readyState:', eventSource.readyState)
+
+      // Log when connection opens
+      eventSource.onopen = () => {
+        console.log('[Pub/Sub] ✅ EventSource connection OPENED, readyState:', eventSource.readyState)
+      }
+
+      // Handle thinking chunks
+      eventSource.addEventListener('thinking_chunk', (event: MessageEvent) => {
+        console.log('[DEBUG] ===== THINKING_CHUNK EVENT =====')
+        console.log('[DEBUG] Raw event.data:', event.data)
+
+        const data = JSON.parse(event.data)
+        console.log('[DEBUG] Parsed data:', data)
+
+        const thinkingContent = data.accumulated || data.data?.accumulated || ''
+        console.log('[DEBUG] Extracted thinkingContent:', thinkingContent)
+        console.log('[DEBUG] thinkingContent length:', thinkingContent.length)
+        console.log('[DEBUG] assistantMessageId:', assistantMessageId)
+
+        if (!hasScrolledForContentRef.current && thinkingContent.length > 0) {
+          hasScrolledForContentRef.current = true
+          setTimeout(scrollToBottom, 50)
+        }
+
+        setMessages((prev: Message[]) => {
+          console.log('[DEBUG] Previous messages count:', prev.length)
+          const updated = prev.map((msg: Message) => {
+            if (msg.id === assistantMessageId) {
+              console.log('[DEBUG] Found matching message, adding thinkingContent')
+              return { ...msg, thinkingContent }
+            }
+            return msg
+          })
+          console.log('[DEBUG] Updated messages count:', updated.length)
+          return updated
+        })
+      })
+
+      // Handle thinking complete
+      eventSource.addEventListener('thinking_complete', (event: MessageEvent) => {
+        console.log('[Pub/Sub] Thinking complete')
+      })
+
+      // Handle intent determined
+      eventSource.addEventListener('intent_determined', (event: MessageEvent) => {
+        const data = JSON.parse(event.data)
+        const isForecast = data.is_forecast || data.data?.is_forecast || false
+        const renderMode: RenderMode = isForecast ? 'forecast' : 'chat'
+
+        console.log('[Pub/Sub] Intent determined:', renderMode)
+        setMessages((prev: Message[]) => prev.map((msg: Message) =>
+          msg.id === assistantMessageId
+            ? { ...msg, renderMode }
+            : msg
+        ))
+      })
+
+      // Handle analysis complete
+      eventSource.addEventListener('analysis_complete', async () => {
+        console.log('[Pub/Sub] Analysis complete')
+        eventSource.close()
+        setIsLoading(false)
+        // ✅ 直接获取最终结果，无需刷新页面
+        try {
+          const { getAnalysisStatus } = await import('@/lib/api/analysis')
+          const finalResult = await getAnalysisStatus(currentSessionId, currentMessageId)
+
+          console.log('[Pub/Sub] Fetched final result:', finalResult)
+
+          const isForecast = finalResult.data?.is_forecast || finalResult.data?.unified_intent?.is_forecast || false
+          const conclusion = finalResult.data?.conclusion || (finalResult.data as any)?.chat_response || ''
+
+          setMessages((prev: Message[]) => prev.map((msg: Message) =>
+            msg.id === assistantMessageId
+              ? {
+                ...msg,
+                contents: conclusion ? [{
+                  type: 'text' as const,
+                  text: conclusion
+                }] : msg.contents || [],
+                renderMode: isForecast ? 'forecast' : 'chat'
+              }
+              : msg
+          ))
+        } catch (error) {
+          console.error('[Pub/Sub] Failed to fetch final result:', error)
+        }
+      })
+
+      // Handle errors
+      eventSource.addEventListener('error', (event: MessageEvent) => {
+        console.error('[Pub/Sub] Error event:', event)
+      })
+
+      eventSource.onerror = (error) => {
+        console.error('[Pub/Sub] SSE connection error:', error)
+        eventSource.close()
+        setIsLoading(false)
+      }
+
+    } catch (error) {
+      console.error('[ChatArea] Error:', error)
+      setIsLoading(false)
+      // Show error message
+      const errorMessage: Message = {
+        id: (Date.now() + 1).toString(),
+        role: 'assistant',
+        text: `抱歉，发生错误：${error instanceof Error ? error.message : '未知错误'}`,
+        timestamp: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
+      }
+      setMessages((prev: Message[]) => [...prev, errorMessage])
+    }
   }
 
 

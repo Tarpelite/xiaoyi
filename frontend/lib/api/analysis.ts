@@ -177,8 +177,11 @@ export async function getAnalysisStatus(
  */
 export interface HistoryMessage {
   message_id: string
+  session_id: string
   user_query: string
   status: 'pending' | 'processing' | 'completed' | 'error'
+  created_at: string
+  thinking_content?: string
   data: MessageData
 }
 
