@@ -217,7 +217,6 @@ class SessionData(BaseModel):
     updated_at: str
 
     # 全局配置
-    context: str = ""
     model_name: Optional[str] = Field(default=None, description="使用的预测模型名称")
 
     # 消息管理

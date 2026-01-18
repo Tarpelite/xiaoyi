@@ -25,7 +25,6 @@ class SessionListItem(BaseModel):
 class CreateSessionRequest(BaseModel):
     """创建会话请求"""
     title: Optional[str] = None
-    context: Optional[str] = None
 
 
 class CreateSessionResponse(BaseModel):
@@ -58,7 +57,7 @@ async def create_session(request: CreateSessionRequest = None):
     """
     req = request or CreateSessionRequest()
 
-    session = Session.create(context=req.context)
+    session = Session.create()
 
     # 如果提供了标题，更新标题
     if req.title:

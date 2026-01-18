@@ -94,9 +94,7 @@ async def create_analysis_task(
         session = Session(request.session_id)
     else:
         # 创建新 session
-        session = Session.create(
-            context=request.context
-        )
+        session = Session.create()
         is_new_session = True
 
     # 为本次查询创建新 Message
@@ -295,9 +293,7 @@ async def stream_analysis(
     if request.session_id and Session.exists(request.session_id):
         session = Session(request.session_id)
     else:
-        session = Session.create(
-            context=request.context
-        )
+        session = Session.create()
         is_new_session = True
 
     # 创建 Message

@@ -260,7 +260,7 @@ class Session:
         self.ttl = 86400  # 24小时过期
 
     @classmethod
-    def create(cls, context: str = "") -> "Session":
+    def create(cls) -> "Session":
         """创建新会话"""
         session_id = str(uuid.uuid4())
         session = cls(session_id)
@@ -268,7 +268,6 @@ class Session:
         now = datetime.now().isoformat()
         initial_data = SessionData(
             session_id=session_id,
-            context=context,
             created_at=now,
             updated_at=now
         )

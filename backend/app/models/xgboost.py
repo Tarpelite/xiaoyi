@@ -12,7 +12,7 @@ import numpy as np
 from .base import BaseForecaster
 from .analyzer import TimeSeriesAnalyzer
 import xgboost as xgb
-from app.utils.trading_calendar import get_trading_calendar
+from app.utils.trading_calendar import get_next_trading_days
 
 class XGBoostForecaster(BaseForecaster):
     """XGBoost 时序预测器"""
@@ -124,11 +124,12 @@ class XGBoostForecaster(BaseForecaster):
         forecast_values = []
         last_date = df["ds"].iloc[-1]
         last_values = df["y"].values[-30:].tolist()
-        
+
+        # 获取未来交易日
+        trading_days = get_next_trading_days(last_date, horizon)
+
         for i in range(horizon):
-            trading_days = get_next_trading_days(last_date, horizon)
-            for i in range(horizon):
-                future_date = trading_days[i]
+            future_date = trading_days[i]
             
             # 准备特征
             future_features = pd.Series(index=feature_df.columns, dtype=float)
