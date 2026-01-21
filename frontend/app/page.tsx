@@ -9,6 +9,7 @@ function HomeContent() {
   const {
     sessions,
     activeSessionId,
+    chatKey,
     createNewSession,
     switchSession,
     deleteSession,
@@ -30,7 +31,7 @@ function HomeContent() {
 
       {/* Main Chat Area */}
       <ChatArea
-        key={activeSessionId || 'new'}
+        key={`${activeSessionId || 'new'}-${chatKey}`}
         sessionId={activeSessionId}
         onSessionCreated={() => {
           // 只刷新会话列表，不切换会话

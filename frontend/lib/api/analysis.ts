@@ -400,13 +400,14 @@ export async function resumeStream(
   sessionId: string,
   messageId: string,
   callbacks: FullStreamCallbacks,
-  lastEventId?: string
+  lastEventId?: string,
+  signal?: AbortSignal
 ): Promise<{ completed: boolean; data?: MessageData }> {
   let url = `${API_BASE_URL}/api/analysis/stream-resume/${sessionId}?message_id=${messageId}`
   if (lastEventId) {
     url += `&last_event_id=${encodeURIComponent(lastEventId)}`
   }
-  const response = await fetch(url)
+  const response = await fetch(url, { signal })
 
   if (!response.ok) {
     if (response.status === 404) {
@@ -439,6 +440,11 @@ export async function resumeStream(
 
   try {
     while (true) {
+      // 检查是否已被中止
+      if (signal?.aborted) {
+        return { completed: false }
+      }
+
       const { done, value } = await reader.read()
 
       if (done) break

@@ -160,6 +160,9 @@ export function ChatArea({ sessionId: externalSessionId, onSessionCreated }: Cha
   const isLoadingRef = useRef(isLoading)
   isLoadingRef.current = isLoading
 
+  // 标记 sessionId 变化来源：'handleSend' 表示由 handleSend 触发，不需要 abort
+  const sessionChangeSourceRef = useRef<'handleSend' | null>(null)
+
   // 是否正在加载历史记录（如果有 sessionId，初始就是加载状态）
   const [isLoadingHistory, setIsLoadingHistory] = useState(!!externalSessionId)
 
@@ -422,14 +425,19 @@ export function ChatArea({ sessionId: externalSessionId, onSessionCreated }: Cha
   const resumeStreamForMessage = async (
     backendMessageId: string,
     currentSessionId: string,
-    assistantMessageId: string
+    assistantMessageId: string,
+    signal?: AbortSignal
   ) => {
     try {
       setIsLoading(true)
       const { resumeStream } = await import('@/lib/api/analysis')
       const callbacks = createStreamCallbacks(assistantMessageId, currentSessionId, backendMessageId)
-      await resumeStream(currentSessionId, backendMessageId, callbacks)
-    } catch (error) {
+      await resumeStream(currentSessionId, backendMessageId, callbacks, undefined, signal)
+    } catch (error: unknown) {
+      // 忽略取消错误
+      if (error instanceof Error && error.name === 'AbortError') {
+        return
+      }
       console.error('恢复流式接收失败:', error)
       setIsLoading(false)
     }
@@ -437,15 +445,20 @@ export function ChatArea({ sessionId: externalSessionId, onSessionCreated }: Cha
 
   // 页面加载时恢复会话历史（每次 sessionId 变化都重新加载）
   useEffect(() => {
+    // 检查 sessionId 变化来源
+    const changeSource = sessionChangeSourceRef.current
+    sessionChangeSourceRef.current = null  // 重置
+
+    // ✅ 只有外部触发的 sessionId 变化（用户切换会话）才 abort 旧请求
+    // handleSend 触发的变化不需要 abort，因为 handleSend 自己管理 AbortController
+    if (changeSource !== 'handleSend' && abortControllerRef.current) {
+      abortControllerRef.current.abort()
+    }
+
     // 如果正在发送消息，跳过加载历史（handleSend 会自己处理）
     if (isLoadingRef.current) {
       setIsLoadingHistory(false)
       return
-    }
-
-    // 取消上一次请求
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort()
     }
 
     // 创建新的 AbortController
@@ -552,7 +565,7 @@ export function ChatArea({ sessionId: externalSessionId, onSessionCreated }: Cha
 
         // 异步恢复进行中的消息（不阻塞渲染）
         for (const { messageId, assistantMessageId } of messagesToResume) {
-          resumeStreamForMessage(messageId, sessionId, assistantMessageId)
+          resumeStreamForMessage(messageId, sessionId, assistantMessageId, abortController.signal)
         }
       } catch (error: unknown) {
         // 如果是取消请求导致的错误，直接忽略
@@ -833,6 +846,14 @@ export function ChatArea({ sessionId: externalSessionId, onSessionCreated }: Cha
     // 重置滚动标记，准备在收到内容时再滚动一次
     hasScrolledForContentRef.current = false
 
+    // 创建新的 AbortController 并更新 ref（覆盖 useEffect 创建的）
+    // 这样 handleSend 接管控制权，后续 setSessionId 触发的 useEffect 会因为 isLoadingRef 而跳过
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort()
+    }
+    const sendAbortController = new AbortController()
+    abortControllerRef.current = sendAbortController
+
     // 创建AI消息占位符（清空旧内容）
     const assistantMessageId = (Date.now() + 1).toString()
     const assistantMessage: Message = {
@@ -855,6 +876,8 @@ export function ChatArea({ sessionId: externalSessionId, onSessionCreated }: Cha
       if (!activeSessionId) {
         const newSession = await createSession()
         activeSessionId = newSession.session_id
+        // 标记这是 handleSend 触发的 sessionId 变化，useEffect 不应该 abort
+        sessionChangeSourceRef.current = 'handleSend'
         setSessionId(activeSessionId)
         // URL 会通过 useEffect 自动更新
       }
@@ -865,6 +888,8 @@ export function ChatArea({ sessionId: externalSessionId, onSessionCreated }: Cha
         sessionId: activeSessionId
       })
 
+      // 标记这是 handleSend 触发的 sessionId 变化，useEffect 不应该 abort
+      sessionChangeSourceRef.current = 'handleSend'
       setSessionId(createResult.session_id)
 
       // 通知父组件会话已创建（立即刷新侧边栏并高亮显示）
@@ -879,9 +904,14 @@ export function ChatArea({ sessionId: externalSessionId, onSessionCreated }: Cha
         createResult.message_id,
         { enableScrollOnFirstContent: true }
       )
-      await resumeStream(createResult.session_id, createResult.message_id, callbacks)
+      // 使用 handleSend 自己的 AbortController，不受 useEffect sessionId 变化影响
+      await resumeStream(createResult.session_id, createResult.message_id, callbacks, undefined, sendAbortController.signal)
 
-    } catch (error) {
+    } catch (error: unknown) {
+      // 忽略取消错误（切换会话时正常行为）
+      if (error instanceof Error && error.name === 'AbortError') {
+        return
+      }
       console.error('发送消息失败:', error)
       // 更新消息显示错误
       setMessages((prev: Message[]) => prev.map((msg: Message) =>

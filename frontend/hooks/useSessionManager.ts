@@ -21,6 +21,8 @@ export function useSessionManager() {
     const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
     const [isLoading, setIsLoading] = useState(true)
     const [isInitialized, setIsInitialized] = useState(false)
+    // 用于强制重新挂载 ChatArea（当 activeSessionId 已经是 null 时点击新建对话）
+    const [chatKey, setChatKey] = useState(0)
 
     // Helper: Update URL with session ID
     const updateUrl = useCallback((sessionId: string | null) => {
@@ -61,6 +63,8 @@ export function useSessionManager() {
     const createNewSession = useCallback(() => {
         setActiveSessionId(null)
         updateUrl(null)
+        // 增加 chatKey 强制 ChatArea 重新挂载（即使 activeSessionId 已经是 null）
+        setChatKey(prev => prev + 1)
     }, [updateUrl])
 
     // Switch to a different session
@@ -136,6 +140,7 @@ export function useSessionManager() {
         sessions,
         activeSessionId,
         isLoading,
+        chatKey,  // 用于 ChatArea 的 key，强制重新挂载
         createNewSession,
         switchSession,
         deleteSession,
