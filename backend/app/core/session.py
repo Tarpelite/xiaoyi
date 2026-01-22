@@ -99,20 +99,22 @@ class Message:
         if data:
             data.unified_intent = intent
 
-            # 设置 intent 字段
+            # 简化意图分类（仅用于日志/调试）
             if not intent.is_in_scope:
                 data.intent = "out_of_scope"
             elif intent.is_forecast:
                 data.intent = "forecast"
-            elif intent.enable_rag:
-                data.intent = "rag"
-            elif intent.enable_search or intent.enable_domain_info:
-                data.intent = "news"
             else:
                 data.intent = "chat"
 
-            # 初始化步骤
-            steps = get_steps_for_intent(data.intent)
+            # 根据实际流程选择步骤
+            has_stock = bool(intent.stock_mention)
+            steps = get_steps_for_intent(
+                is_forecast=intent.is_forecast,
+                is_in_scope=intent.is_in_scope,
+                has_stock=has_stock
+            )
+
             data.total_steps = len(steps)
             data.step_details = [
                 StepDetail(id=s["id"], name=s["name"], status=StepStatus.PENDING, message="")
@@ -120,7 +122,7 @@ class Message:
             ]
 
             self._save(data)
-            print(f"[Message] Intent: {data.intent}, forecast={intent.is_forecast}")
+            print(f"[Message] Intent: {data.intent}, has_stock={has_stock}, steps={len(steps)}")
 
     # ========== 股票相关 ==========
 

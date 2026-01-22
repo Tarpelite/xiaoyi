@@ -8,12 +8,13 @@ DLinear: 通过 Series Decomposition + Two Linear Layers 进行预测
 参考: https://arxiv.org/abs/2205.13504
 """
 
-from typing import Dict, Any, Tuple
+from typing import Dict, Any, Tuple, List
 from datetime import timedelta
 import pandas as pd
 import numpy as np
 from .base import BaseForecaster
-from app.utils.trading_calendar import get_trading_calendar
+from app.utils.trading_calendar import get_next_trading_days
+from app.schemas.session_schema import ForecastResult, ForecastMetrics, TimeSeriesPoint
 
 class MovingAverage:
     """移动平均核用于趋势提取"""
@@ -136,72 +137,74 @@ class DLinearForecaster(BaseForecaster):
         self.trend_layer = None
         self.seasonal_layer = None
     
-    def forecast(self, df: pd.DataFrame, horizon: int = 30) -> Dict[str, Any]:
+    def forecast(self, df: pd.DataFrame, horizon: int = 30) -> ForecastResult:
         """使用 DLinear 模型进行时序预测"""
         # 检查数据量
         min_required = self.seq_len + 20
         if len(df) < min_required:
             raise ValueError(f"DLinear 需要至少 {min_required} 条历史数据，当前只有 {len(df)} 条")
-        
+
         values = df["y"].values
-        
+
         trend, seasonal = self.decomposition.forward(values)
         X_trend, y_trend = self._create_sequences(trend, self.seq_len)
         X_seasonal, y_seasonal = self._create_sequences(seasonal, self.seq_len)
-        
+
         # 训练单步预测线性层
         self.trend_layer = LinearLayer(self.seq_len, 1)
         self.seasonal_layer = LinearLayer(self.seq_len, 1)
         self.trend_layer.fit(X_trend, y_trend, alpha=0.01)
         self.seasonal_layer.fit(X_seasonal, y_seasonal, alpha=0.01)
-        
+
         # 计算置信区间
         train_pred_trend = self.trend_layer.predict(X_trend).flatten()
         train_pred_seasonal = self.seasonal_layer.predict(X_seasonal).flatten()
         residuals = (y_trend.flatten() + y_seasonal.flatten()) - (train_pred_trend + train_pred_seasonal)
         std_error = np.std(residuals)
-        
+
         # 递归预测 - 使用原始值窗口
-        forecast_values = []
+        forecast_points = []
         last_date = df["ds"].iloc[-1]
-        
+
         # 初始化窗口为最后seq_len个原始值
         value_window = values[-self.seq_len:].copy()
-        
+
+        # 获取未来交易日（移到循环外，修复原 bug）
+        trading_days = get_next_trading_days(last_date, horizon)
+
         for i in range(horizon):
-            # 在for循环之前
-            trading_days = get_next_trading_days(last_date, horizon)
-            for i in range(horizon):
-                future_date = trading_days[i]
-            
+            future_date = trading_days[i]
+
             # 分解当前窗口
             window_trend, window_seasonal = self.decomposition.forward(value_window)
-            
+
             # 使用最后seq_len个trend/seasonal进行预测
             trend_pred = float(self.trend_layer.predict(window_trend).item())
             seasonal_pred = float(self.seasonal_layer.predict(window_seasonal).item())
-            
+
             # 组合得到原始值预测
             pred_value = trend_pred + seasonal_pred
-            
-            forecast_values.append({
-                "date": future_date.strftime("%Y-%m-%d"),
-                "value": round(pred_value, 2),
-                "lower": round(pred_value - 1.96 * std_error, 2),
-                "upper": round(pred_value + 1.96 * std_error, 2),
-            })
-            
+
+            forecast_points.append(TimeSeriesPoint(
+                date=future_date.strftime("%Y-%m-%d"),
+                value=round(pred_value, 2),
+                is_prediction=True
+            ))
+
             # 更新窗口：移除最旧值，添加新预测值
             value_window = np.append(value_window[1:], pred_value)
-        
+
         mae = np.mean(np.abs(residuals))
         rmse = np.sqrt(np.mean(residuals ** 2))
-        
-        return {
-            "forecast": forecast_values,
-            "metrics": {"mae": round(float(mae), 4), "rmse": round(float(rmse), 4)},
-            "model": "dlinear"
-        }
+
+        return ForecastResult(
+            points=forecast_points,
+            metrics=ForecastMetrics(
+                mae=round(float(mae), 4),
+                rmse=round(float(rmse), 4)
+            ),
+            model="dlinear"
+        )
     
     def _create_sequences(
         self,

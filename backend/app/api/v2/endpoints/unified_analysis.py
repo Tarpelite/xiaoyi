@@ -8,34 +8,35 @@
 - Session: 一整个多轮对话 (复用同一 session_id)
 - Message: 每轮 QA (每次查询创建新 message_id)
 
-轮询间隔建议: 0.5s (500ms)
+核心端点:
+- POST /create: 创建后台任务，返回 message_id
+- GET /stream-resume: 追赶历史事件 + 订阅实时事件 (SSE)
+- GET /history: 刷新后恢复已完成的历史消息
 """
 
 import asyncio
 import json
 import math
-import os
 import time
-import concurrent.futures
 from typing import Optional
 
 import pandas as pd
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from app.core.config import settings
 from app.core.session import Session, Message
-from app.core.unified_tasks import get_task_processor
+from app.core.streaming_task_processor import get_streaming_processor
+from app.core.workflows import run_forecast
+from app.core.redis_client import get_redis, get_async_redis
 from app.schemas.session_schema import (
     CreateAnalysisRequest,
-    AnalysisStatusResponse,
     BacktestRequest,
     BacktestResponse,
     BacktestMetrics,
     TimeSeriesPoint,
 )
-from app.agents import SuggestionAgent, IntentAgent
+from app.agents import SuggestionAgent
 
 
 class SuggestionsRequest(BaseModel):
@@ -43,79 +44,65 @@ class SuggestionsRequest(BaseModel):
     session_id: Optional[str] = None
 
 
-# 轮询间隔常量 (供前端参考)
-RECOMMENDED_POLL_INTERVAL_MS = 500
-
 router = APIRouter()
 
 
-@router.post("/create", response_model=dict)
-async def create_analysis_task(
+async def run_background_analysis(session_id: str, message_id: str, user_input: str, model_name: str):
+    """后台运行分析任务（独立于 SSE 连接）"""
+    streaming_processor = get_streaming_processor()
+    await streaming_processor.execute_streaming(
+        session_id, message_id, user_input, None, model_name
+    )
+
+
+@router.post("/create")
+async def create_analysis(
     request: CreateAnalysisRequest,
     background_tasks: BackgroundTasks
 ):
     """
-    创建分析任务（统一入口）
+    创建分析任务（后台独立运行）
 
-    支持四种意图：
-    - forecast: 完整预测分析（7步）
-    - rag: 研报检索（2步）
-    - news: 新闻搜索（2步）
-    - chat: 纯对话（1步）
-
-    架构说明:
-    - Session: 整个多轮对话复用同一 session_id
-    - Message: 每次查询创建新 message_id，存储该轮分析结果
+    任务通过 BackgroundTasks 独立运行，不依赖 SSE 连接。
+    前端刷新后，后端任务不受影响。
 
     Args:
-        request: 请求体
+        request: CreateAnalysisRequest
             - message: 用户问题
-            - session_id: 会话ID（可选，用于多轮对话）
-            - model: 预测模型（prophet/xgboost/randomforest/dlinear）
-            - context: 上下文
-            - force_intent: 强制指定意图
+            - model: 预测模型
+            - session_id: 会话 ID（可选）
 
     Returns:
-        {
-            "session_id": "uuid-xxx",
-            "message_id": "uuid-yyy",
-            "status": "created"
-        }
+        - session_id: 会话 ID
+        - message_id: 消息 ID
+        - status: "created"
     """
-    try:
-        api_key = settings.api_key
-    except ValueError as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
     # 获取或创建 Session
-    is_new_session = False
     if request.session_id and Session.exists(request.session_id):
-        # 复用已有 session
         session = Session(request.session_id)
     else:
-        # 创建新 session
         session = Session.create()
-        is_new_session = True
 
-    # 为本次查询创建新 Message
+    # 检查是否是首条消息（用于自动生成标题）
+    session_data = session.get()
+    is_first_message = session_data and len(session_data.message_ids) == 0
+
+    # 创建 Message
     message = session.create_message(request.message)
 
-    # 如果是新会话的第一条消息，自动生成标题
-    if is_new_session:
+    # 如果是首条消息，自动生成标题
+    if is_first_message:
         session.auto_generate_title(request.message)
 
-    # 添加用户消息到对话历史
     session.add_conversation_message("user", request.message)
 
-    # 在后台启动任务 (传入 message_id)
-    task_processor = get_task_processor(api_key)
+    # 后台任务独立运行
     background_tasks.add_task(
-        task_processor.execute,
+        run_background_analysis,
         session.session_id,
-        message.message_id,  # 新增: 传入 message_id
+        message.message_id,
         request.message,
-        request.model,
-        request.force_intent
+        request.model or "prophet"
     )
 
     return {
@@ -125,62 +112,15 @@ async def create_analysis_task(
     }
 
 
-@router.get("/status/{session_id}", response_model=AnalysisStatusResponse)
-async def get_analysis_status(
-    session_id: str,
-    message_id: Optional[str] = Query(default=None, description="消息ID，不传则返回当前消息")
-):
-    """
-    查询分析任务状态
-
-    前端轮询间隔建议: 500ms (0.5s)
-
-    Args:
-        session_id: 会话 ID
-        message_id: 消息 ID（可选，不传则返回当前正在处理的消息）
-
-    Returns:
-        AnalysisStatusResponse: 包含消息数据
-            - session_id: 会话 ID
-            - message_id: 消息 ID
-            - status: 状态 (pending/processing/completed/error)
-            - steps: 当前步骤
-            - total_steps: 总步骤数
-            - data: 消息数据 (MessageData)
-    """
-    if not Session.exists(session_id):
-        raise HTTPException(status_code=404, detail="会话不存在")
-
-    session = Session(session_id)
-
-    # 获取指定消息或当前消息
-    if message_id:
-        message = session.get_message(message_id)
-        if not message:
-            raise HTTPException(status_code=404, detail="消息不存在")
-    else:
-        message = session.get_current_message()
-        if not message:
-            raise HTTPException(status_code=404, detail="无活动消息")
-
-    data = message.get()
-    if not data:
-        raise HTTPException(status_code=404, detail="消息数据不存在")
-
-    return AnalysisStatusResponse(
-        session_id=session_id,
-        message_id=message.message_id,
-        status=data.status,
-        steps=data.steps,
-        total_steps=data.total_steps,
-        data=data
-    )
-
-
 @router.get("/history/{session_id}")
 async def get_session_history(session_id: str):
     """
-    获取会话历史（用于页面刷新后恢复）
+    获取会话历史（所有消息）
+
+    返回该会话的所有消息，每条消息带有 status 标记。
+    前端根据 status 决定渲染方式：
+    - completed/error: 直接渲染完整内容
+    - pending/processing: 调用 /stream-resume 进行 catch-up + listen
 
     Args:
         session_id: 会话 ID
@@ -192,7 +132,7 @@ async def get_session_history(session_id: str):
                 {
                     "message_id": "uuid-yyy",
                     "user_query": "用户问题",
-                    "status": "completed",
+                    "status": "completed" | "processing" | "pending" | "error",
                     "data": MessageData
                 },
                 ...
@@ -234,11 +174,6 @@ async def get_suggestions(request: SuggestionsRequest):
     Returns:
         {"suggestions": ["建议1", "建议2", ...]}
     """
-    try:
-        api_key = settings.api_key
-    except ValueError as e:
-        return {"error": str(e), "suggestions": []}
-
     session_id = request.session_id
 
     # 如果没有提供 session_id，返回默认建议
@@ -256,7 +191,7 @@ async def get_suggestions(request: SuggestionsRequest):
     conversation_history = session.get_conversation_history()
 
     # 生成建议
-    suggestion_agent = SuggestionAgent(api_key)
+    suggestion_agent = SuggestionAgent()
     suggestions = await asyncio.to_thread(
         suggestion_agent.generate_suggestions,
         conversation_history
@@ -265,134 +200,101 @@ async def get_suggestions(request: SuggestionsRequest):
     return {"suggestions": suggestions}
 
 
-@router.post("/stream")
-async def stream_analysis(
-    request: CreateAnalysisRequest,
-    background_tasks: BackgroundTasks
+@router.get("/stream-resume/{session_id}")
+async def stream_resume(
+    session_id: str,
+    message_id: str = Query(..., description="消息 ID"),
+    last_event_id: str = Query("0-0", description="最后接收的事件 ID，默认为 0-0")
 ):
     """
-    流式分析接口 - 实时返回思考过程
+    断点续传端点 - 使用异步 XREAD 从 Redis Stream 读取事件
 
-    SSE 事件类型:
-    - thinking: 思考内容片段 {"type": "thinking", "content": "..."}
-    - session: 会话信息 {"type": "session", "session_id": "...", "message_id": "..."}
-    - intent: 意图结果 {"type": "intent", "intent": "forecast|chat|...", "is_forecast": true|false}
-    - done: 思考完成 {"type": "done"}
+    Args:
+        session_id: 会话 ID
+        message_id: 消息 ID
+        last_event_id: 最后接收的事件 ID，默认为 0-0
 
-    完成后前端使用 polling 获取后续分析结果
+    Returns:
+        SSE 流
     """
-    try:
-        api_key = settings.api_key
-    except ValueError as e:
-        async def error_stream():
-            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
-        return StreamingResponse(error_stream(), media_type="text/event-stream")
+    if not Session.exists(session_id):
+        raise HTTPException(status_code=404, detail="会话不存在")
 
-    # 获取或创建 Session
-    is_new_session = False
-    if request.session_id and Session.exists(request.session_id):
-        session = Session(request.session_id)
-    else:
-        session = Session.create()
-        is_new_session = True
+    message_obj = Message(message_id, session_id)
+    data = message_obj.get()
 
-    # 创建 Message
-    message = session.create_message(request.message)
-    
-    # 如果是新会话的第一条消息，自动生成标题
-    if is_new_session:
-        session.auto_generate_title(request.message)
-    
-    session.add_conversation_message("user", request.message)
+    if not data:
+        raise HTTPException(status_code=404, detail="消息不存在")
 
-    # 获取对话历史
-    conversation_history = session.get_conversation_history()
+    stream_key = f"stream-events:{message_id}"
 
-    # 使用 asyncio.Queue 实现真正的流式传输
-    thinking_queue: asyncio.Queue = asyncio.Queue()
+    # 如果任务已完成，直接返回 JSON
+    if data.stream_status not in ("streaming", None, ""):
+        return {
+            "status": data.stream_status,
+            "message_status": data.status.value,
+            "data": data.model_dump()
+        }
 
     async def event_stream():
-        """SSE 事件流生成器"""
-        # 1. 发送 session 信息
-        yield f"data: {json.dumps({'type': 'session', 'session_id': session.session_id, 'message_id': message.message_id})}\n\n"
+        nonlocal last_event_id
 
-        # 2. 获取事件循环并启动线程
-        loop = asyncio.get_running_loop()
-        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        # 获取异步 Redis 连接
+        r = get_async_redis()
 
-        def run_intent_in_thread():
-            """在线程中运行意图识别"""
-            intent_agent = IntentAgent(api_key)
+        try:
+            # 先发送当前状态
+            yield f"data: {json.dumps({'type': 'resume', 'current_data': data.model_dump()})}\n\n"
 
-            def on_thinking_chunk(chunk: str):
-                # 线程安全地将内容放入队列
-                loop.call_soon_threadsafe(thinking_queue.put_nowait, ('thinking', chunk))
-
-            intent, _ = intent_agent.recognize_intent_streaming(
-                request.message,
-                conversation_history,
-                on_thinking_chunk
-            )
-            # 发送完成信号
-            loop.call_soon_threadsafe(thinking_queue.put_nowait, ('intent_done', intent))
-
-        # 提交到线程池
-        future = loop.run_in_executor(executor, run_intent_in_thread)
-
-        # 3. 从队列读取并流式输出
-        intent = None
-        while True:
-            try:
-                # 使用超时避免永久阻塞
-                event_type, data = await asyncio.wait_for(thinking_queue.get(), timeout=60.0)
-
-                if event_type == 'thinking':
-                    yield f"data: {json.dumps({'type': 'thinking', 'content': data})}\n\n"
-                elif event_type == 'intent_done':
-                    intent = data
+            while True:
+                try:
+                    # 异步 XREAD：阻塞等待新事件，不会卡住事件循环
+                    events = await r.xread(
+                        streams={stream_key: last_event_id},
+                        count=10,
+                        block=2000  # 阻塞 2 秒
+                    )
+                except Exception as e:
+                    yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
                     break
-            except asyncio.TimeoutError:
-                yield f"data: {json.dumps({'type': 'error', 'message': '意图识别超时'})}\n\n"
-                return
 
-        # 等待线程完成
-        await future
-        executor.shutdown(wait=False)
+                # 超时没有新数据
+                if not events:
+                    # 检查任务是否已结束
+                    check_data = message_obj.get()
+                    if check_data and check_data.stream_status not in ("streaming", None, ""):
+                        yield f"data: {json.dumps({'type': 'done', 'completed': True})}\n\n"
+                        break
+                    continue
 
-        if not intent:
-            yield f"data: {json.dumps({'type': 'error', 'message': '意图识别失败'})}\n\n"
-            return
+                # 处理事件
+                for stream_name, message_list in events:
+                    for msg_id, fields in message_list:
+                        last_event_id = msg_id
 
-        # 4. 发送意图结果
-        yield f"data: {json.dumps({'type': 'intent', 'intent': 'forecast' if intent.is_forecast else 'chat', 'is_forecast': intent.is_forecast, 'reason': intent.reason})}\n\n"
+                        if "data" in fields:
+                            event_data = fields["data"]
+                            yield f"data: {event_data}\n\n"
 
-        # 5. 保存意图到 Message
-        message.save_unified_intent(intent)
+                            # 检查是否结束
+                            try:
+                                payload = json.loads(event_data)
+                                if payload.get("type") in ("done", "error"):
+                                    await r.aclose()
+                                    return
+                            except json.JSONDecodeError:
+                                pass
 
-        # 6. 处理超出范围的情况
-        if not intent.is_in_scope:
-            message.save_conclusion(intent.out_of_scope_reply or "抱歉，我是金融时序分析助手，暂不支持此类问题。")
-            message.update_step_detail(1, "completed", "超出服务范围")
-            message.mark_completed()
-            yield f"data: {json.dumps({'type': 'done', 'completed': True})}\n\n"
-            return
+        except asyncio.CancelledError:
+            pass
+        finally:
+            await r.aclose()
 
-        message.update_step_detail(1, "completed", f"意图: {'预测' if intent.is_forecast else '对话'}")
-
-        # 7. 启动后台任务处理剩余步骤
-        task_processor = get_task_processor(api_key)
-        background_tasks.add_task(
-            task_processor.execute_after_intent,
-            session.session_id,
-            message.message_id,
-            request.message,
-            intent
-        )
-
-        # 8. 发送完成信号
-        yield f"data: {json.dumps({'type': 'done', 'completed': False})}\n\n"
-
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"X-Accel-Buffering": "no"}
+    )
 
 
 @router.post("/backtest")
@@ -454,38 +356,24 @@ async def backtest_prediction(request: "BacktestRequest"):
     # 4. 计算horizon: max(90天, ground_truth长度)
     # 这样即使ground_truth较短，也会显示完整的90天预测
     horizon = max(90, len(ground_truth_points))
-    
-    # 获取API key
-    api_key = os.getenv("DEEPSEEK_API_KEY")
-    if not api_key:
-        raise HTTPException(500, "API key not configured")
 
-    task_processor = get_task_processor(api_key)
-    
     # 转换为DataFrame
     df = pd.DataFrame({
         "ds": pd.to_datetime([p.date for p in train_points]),
         "y": [p.value for p in train_points]
     })
-    
+
     # 运行预测
     model_to_use = data.model_name if hasattr(data, 'model_name') and data.model_name else "prophet"
-    forecast_result = await task_processor._run_forecast(
+    forecast_result = await run_forecast(
         df,
         model_to_use,
         horizon,
         {}  # Prophet参数
     )
     
-    # 提取预测结果
-    backtest_points = [
-        TimeSeriesPoint(
-            date=item["date"],
-            value=item["value"],
-            is_prediction=True
-        )
-        for item in forecast_result["forecast"]
-    ]
+    # 提取预测结果（forecast_result 是 ForecastResult 对象）
+    backtest_points = forecast_result.points
     
     # 对齐日期（确保预测和ground truth长度一致）
     backtest_aligned = {}

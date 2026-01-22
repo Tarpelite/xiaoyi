@@ -5,7 +5,10 @@
  * - Session: 整个多轮对话 (复用同一 session_id)
  * - Message: 每轮 QA (每次查询创建新 message_id)
  *
- * 使用轮询方式获取分析结果
+ * 核心 API:
+ * - createAnalysis(): 创建后台任务
+ * - resumeStream(): 追赶历史事件 + 订阅实时事件 (SSE)
+ * - getSessionHistory(): 刷新后恢复已完成的历史消息
  */
 
 export interface CreateAnalysisRequest {
@@ -119,35 +122,34 @@ export interface MessageData {
 // 兼容旧版类型别名
 export type AnalysisSessionData = MessageData
 
-export interface AnalysisStatusResponse {
-  session_id: string
-  message_id: string
-  status: 'pending' | 'processing' | 'completed' | 'error'
-  steps: number
-  total_steps: number
-  data: MessageData
-}
-
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
 /**
- * 查询任务状态
+ * 创建分析任务（后台独立运行）
  *
- * @param sessionId 会话ID
- * @param messageId 消息ID (可选，不传则返回当前正在处理的消息)
+ * 任务通过后端 BackgroundTasks 独立运行，不依赖前端连接。
+ * 前端刷新后，后端任务不受影响。
+ *
+ * @param message 用户问题
+ * @param options 选项（model, sessionId）
+ * @returns { session_id, message_id, status }
  */
-export async function getAnalysisStatus(
-  sessionId: string,
-  messageId?: string | null
-): Promise<AnalysisStatusResponse> {
-  const url = messageId
-    ? `${API_BASE_URL}/api/analysis/status/${sessionId}?message_id=${messageId}`
-    : `${API_BASE_URL}/api/analysis/status/${sessionId}`
-
-  const response = await fetch(url)
+export async function createAnalysis(
+  message: string,
+  options?: { model?: string; sessionId?: string | null }
+): Promise<CreateAnalysisResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/analysis/create`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      message,
+      model: options?.model || 'prophet',
+      session_id: options?.sessionId || null
+    })
+  })
 
   if (!response.ok) {
-    throw new Error(`Failed to get analysis status: ${response.statusText}`)
+    throw new Error(`Failed to create analysis: ${response.statusText}`)
   }
 
   return response.json()
@@ -175,11 +177,17 @@ export interface SessionHistoryResponse {
  * 获取会话历史（用于页面刷新后恢复）
  *
  * @param sessionId 会话ID
+ * @param signal 可选的 AbortSignal，用于取消请求
  * @returns 会话历史数据
  */
-export async function getSessionHistory(sessionId: string): Promise<SessionHistoryResponse | null> {
+export async function getSessionHistory(
+  sessionId: string,
+  signal?: AbortSignal
+): Promise<SessionHistoryResponse | null> {
   try {
-    const response = await fetch(`${API_BASE_URL}/api/analysis/history/${sessionId}`)
+    const response = await fetch(`${API_BASE_URL}/api/analysis/history/${sessionId}`, {
+      signal
+    })
 
     if (response.status === 404) {
       // 会话不存在，返回 null
@@ -192,47 +200,17 @@ export async function getSessionHistory(sessionId: string): Promise<SessionHisto
 
     return response.json()
   } catch (error) {
+    // 如果是取消请求，直接抛出让调用方处理
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw error
+    }
     console.error('获取会话历史失败:', error)
-    return null
+    throw error
   }
 }
 
 /**
- * 轮询任务状态直到完成
- *
- * @param sessionId 会话ID
- * @param messageId 消息ID (推荐传入，确保轮询正确的消息)
- * @param onUpdate 状态更新回调
- * @param pollInterval 轮询间隔（毫秒）
- */
-export async function pollAnalysisStatus(
-  sessionId: string,
-  messageId: string | null,
-  onUpdate: (status: AnalysisStatusResponse) => void,
-  pollInterval: number = 500
-): Promise<AnalysisStatusResponse> {
-  return new Promise((resolve, reject) => {
-    const poll = async () => {
-      try {
-        const status = await getAnalysisStatus(sessionId, messageId)
-        onUpdate(status)
-
-        if (status.status === 'completed' || status.status === 'error') {
-          resolve(status)
-        } else {
-          setTimeout(poll, pollInterval)
-        }
-      } catch (error) {
-        reject(error)
-      }
-    }
-
-    poll()
-  })
-}
-
-/**
- * SSE 流式事件类型
+ * SSE 流式事件类型（旧版，仅思考流式）
  */
 export interface StreamEvent {
   type: 'session' | 'thinking' | 'intent' | 'done' | 'error'
@@ -244,6 +222,27 @@ export interface StreamEvent {
   reason?: string
   completed?: boolean
   message?: string  // error message
+}
+
+/**
+ * 完全流式 SSE 事件类型
+ */
+export interface FullStreamEvent {
+  type: 'session' | 'step_start' | 'step_progress' | 'step_complete' | 'thinking' | 'data' | 'report_chunk' | 'chat_chunk' | 'emotion_chunk' | 'intent' | 'heartbeat' | 'done' | 'error' | 'resume'
+  session_id?: string
+  message_id?: string
+  step?: number
+  step_name?: string
+  content?: string
+  data_type?: 'time_series_original' | 'time_series_full' | 'news' | 'emotion'
+  data?: unknown
+  prediction_start_day?: string
+  intent?: string
+  is_forecast?: boolean
+  reason?: string
+  completed?: boolean
+  message?: string
+  current_data?: MessageData
 }
 
 /**
@@ -367,4 +366,156 @@ export async function streamAnalysisTask(
   }
 
   return { session_id: sessionIdResult, message_id: messageIdResult }
+}
+
+/**
+ * 完全流式分析回调接口
+ */
+export interface FullStreamCallbacks {
+  onSession?: (sessionId: string, messageId: string) => void
+  onStepStart?: (step: number, stepName: string) => void
+  onStepComplete?: (step: number, data: Record<string, unknown>) => void
+  onThinking?: (content: string) => void
+  onIntent?: (intent: string, isForecast: boolean, reason: string) => void
+  onData?: (dataType: string, data: unknown, predictionStartDay?: string) => void
+  onReportChunk?: (content: string) => void
+  onChatChunk?: (content: string) => void
+  onEmotionChunk?: (content: string) => void
+  onHeartbeat?: () => void
+  onDone?: (completed: boolean) => void
+  onError?: (message: string) => void
+  onResume?: (currentData: MessageData) => void
+}
+
+/**
+ * 恢复流式会话（断点续传）
+ *
+ * @param sessionId 会话 ID
+ * @param messageId 消息 ID
+ * @param callbacks 流式回调函数
+ * @param lastEventId 最后接收的事件 ID（可选，用于从特定位置恢复）
+ * @returns 如果任务已完成，返回当前数据；否则通过 SSE 继续接收
+ */
+export async function resumeStream(
+  sessionId: string,
+  messageId: string,
+  callbacks: FullStreamCallbacks,
+  lastEventId?: string,
+  signal?: AbortSignal
+): Promise<{ completed: boolean; data?: MessageData }> {
+  let url = `${API_BASE_URL}/api/analysis/stream-resume/${sessionId}?message_id=${messageId}`
+  if (lastEventId) {
+    url += `&last_event_id=${encodeURIComponent(lastEventId)}`
+  }
+  const response = await fetch(url, { signal })
+
+  if (!response.ok) {
+    if (response.status === 404) {
+      throw new Error('Session or message not found')
+    }
+    throw new Error(`Failed to resume stream: ${response.statusText}`)
+  }
+
+  // 检查 Content-Type 确定是 JSON 还是 SSE
+  const contentType = response.headers.get('Content-Type') || ''
+
+  if (contentType.includes('application/json')) {
+    // 任务已完成，返回 JSON 数据
+    const result = await response.json()
+    return {
+      completed: result.status !== 'streaming',
+      data: result.data
+    }
+  }
+
+  // SSE 流式返回
+  const reader = response.body?.getReader()
+  const decoder = new TextDecoder()
+
+  if (!reader) {
+    throw new Error('No response body')
+  }
+
+  let buffer = ''
+
+  try {
+    while (true) {
+      // 检查是否已被中止
+      if (signal?.aborted) {
+        return { completed: false }
+      }
+
+      const { done, value } = await reader.read()
+
+      if (done) break
+
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || ''
+
+      for (const line of lines) {
+        if (!line.trim()) continue
+
+        if (line.startsWith('data: ')) {
+          try {
+            const event: FullStreamEvent = JSON.parse(line.slice(6))
+
+            switch (event.type) {
+              case 'resume':
+                if (event.current_data) {
+                  callbacks.onResume?.(event.current_data)
+                }
+                break
+
+              case 'step_start':
+                callbacks.onStepStart?.(event.step || 0, event.step_name || '')
+                break
+
+              case 'step_complete':
+                callbacks.onStepComplete?.(event.step || 0, event.data as Record<string, unknown> || {})
+                break
+
+              case 'thinking':
+                callbacks.onThinking?.(event.content || '')
+                break
+
+              case 'data':
+                callbacks.onData?.(
+                  event.data_type || '',
+                  event.data,
+                  event.prediction_start_day
+                )
+                break
+
+              case 'report_chunk':
+                callbacks.onReportChunk?.(event.content || '')
+                break
+
+              case 'chat_chunk':
+                callbacks.onChatChunk?.(event.content || '')
+                break
+
+              case 'emotion_chunk':
+                callbacks.onEmotionChunk?.(event.content || '')
+                break
+
+              case 'done':
+                callbacks.onDone?.(event.completed || false)
+                return { completed: true }
+
+              case 'error':
+                callbacks.onError?.(event.message || 'Unknown error')
+                return { completed: true }
+            }
+          } catch (e) {
+            console.error('Parse SSE event error:', e, 'Line:', line)
+          }
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock()
+  }
+
+  return { completed: true }
 }

@@ -13,55 +13,17 @@
 
 from typing import Dict, List, Optional, Generator, Callable, Tuple
 import json
-from openai import OpenAI
 
+from .base import BaseAgent
 from app.schemas.session_schema import UnifiedIntent, ResolvedKeywords
 
 
-class IntentAgent:
+class IntentAgent(BaseAgent):
     """统一意图识别 Agent"""
 
-    def __init__(self, api_key: str, base_url: str = "https://api.deepseek.com"):
-        self.client = OpenAI(api_key=api_key, base_url=base_url)
+    DEFAULT_TEMPERATURE = 0.1
 
-    def _build_intent(self, result: Dict) -> UnifiedIntent:
-        """从 LLM 返回的 dict 构建 UnifiedIntent 对象"""
-        return UnifiedIntent(
-            is_in_scope=result.get("is_in_scope", True),
-            is_forecast=result.get("is_forecast", False),
-            enable_rag=result.get("enable_rag", False),
-            enable_search=result.get("enable_search", False),
-            enable_domain_info=result.get("enable_domain_info", False),
-            stock_mention=result.get("stock_mention") or None,
-            stock_full_name=result.get("stock_full_name") or None,
-            raw_search_keywords=result.get("raw_search_keywords", []),
-            raw_rag_keywords=result.get("raw_rag_keywords", []),
-            raw_domain_keywords=result.get("raw_domain_keywords", []),
-            forecast_model=result.get("forecast_model", "prophet"),
-            history_days=result.get("history_days", 365),
-            forecast_horizon=result.get("forecast_horizon", 30),
-            reason=result.get("reason", ""),
-            out_of_scope_reply=result.get("out_of_scope_reply")
-        )
-
-    def recognize_intent(
-        self,
-        user_query: str,
-        conversation_history: Optional[List[Dict[str, str]]] = None
-    ) -> UnifiedIntent:
-        """
-        统一意图识别
-
-        一次 LLM 调用返回所有意图信息
-
-        Args:
-            user_query: 用户问题
-            conversation_history: 对话历史
-
-        Returns:
-            UnifiedIntent 对象
-        """
-        system_prompt = """你是金融时序分析助手的意图识别模块。根据用户问题，一次性判断所有意图信息。
+    INTENT_SYSTEM_PROMPT = """你是金融时序分析助手的意图识别模块。根据用户问题，一次性判断所有意图信息。
 
 ## 服务范围 (is_in_scope)
 
@@ -178,52 +140,7 @@ class IntentAgent:
     "out_of_scope_reply": "若超出范围的友好回复，否则为null"
 }"""
 
-        messages = [{"role": "system", "content": system_prompt}]
-
-        # 添加对话历史
-        if conversation_history:
-            recent_history = conversation_history[-6:] if len(conversation_history) > 6 else conversation_history
-            for msg in recent_history:
-                messages.append({
-                    "role": msg["role"],
-                    "content": msg["content"]
-                })
-
-        # 添加当前问题
-        messages.append({
-            "role": "user",
-            "content": f"用户问题: {user_query}\n\n请进行意图识别。"
-        })
-
-        response = self.client.chat.completions.create(
-            model="deepseek-chat",
-            messages=messages,
-            temperature=0.1,
-            response_format={"type": "json_object"}
-        )
-
-        result = json.loads(response.choices[0].message.content)
-        return self._build_intent(result)
-
-    def recognize_intent_streaming(
-        self,
-        user_query: str,
-        conversation_history: Optional[List[Dict[str, str]]] = None,
-        on_thinking_chunk: Optional[Callable[[str], None]] = None
-    ) -> Tuple[UnifiedIntent, str]:
-        """
-        流式意图识别 - 实时返回思考过程
-
-        Args:
-            user_query: 用户问题
-            conversation_history: 对话历史
-            on_thinking_chunk: 回调函数，接收思考内容片段
-
-        Returns:
-            (UnifiedIntent, 完整思考内容)
-        """
-        # 使用带思考过程的 prompt
-        system_prompt = """你是金融时序分析助手的意图识别模块。请先分析用户意图，然后返回结果。
+    STREAMING_SYSTEM_PROMPT = """你是金融时序分析助手的意图识别模块。请先分析用户意图，然后返回结果。
 
 ## 分析步骤（请详细描述你的思考过程）
 
@@ -272,52 +189,71 @@ class IntentAgent:
 }
 ```"""
 
-        messages = [{"role": "system", "content": system_prompt}]
+    CHAT_SYSTEM_PROMPT = """你是专业的金融分析助手。根据上下文和对话历史回答用户问题。
 
-        # 添加对话历史
-        if conversation_history:
-            recent_history = conversation_history[-6:] if len(conversation_history) > 6 else conversation_history
-            for msg in recent_history:
-                messages.append({
-                    "role": msg["role"],
-                    "content": msg["content"]
-                })
+要求：
+1. 回答简洁专业
+2. 如果引用了来源，使用 markdown 链接格式 [标题](url)
+3. 如果引用了研报，使用格式 [研报名称](rag://文件名.pdf#page=页码)
+4. 如果无法从上下文找到相关信息，如实说明"""
 
-        messages.append({
-            "role": "user",
-            "content": f"用户问题: {user_query}\n\n请分析意图。"
-        })
-
-        # 流式调用
-        response = self.client.chat.completions.create(
-            model="deepseek-chat",
-            messages=messages,
-            temperature=0.1,
-            stream=True
+    def _build_intent(self, result: Dict) -> UnifiedIntent:
+        """从 LLM 返回的 dict 构建 UnifiedIntent 对象"""
+        return UnifiedIntent(
+            is_in_scope=result.get("is_in_scope", True),
+            is_forecast=result.get("is_forecast", False),
+            enable_rag=result.get("enable_rag", False),
+            enable_search=result.get("enable_search", False),
+            enable_domain_info=result.get("enable_domain_info", False),
+            stock_mention=result.get("stock_mention") or None,
+            stock_full_name=result.get("stock_full_name") or None,
+            raw_search_keywords=result.get("raw_search_keywords", []),
+            raw_rag_keywords=result.get("raw_rag_keywords", []),
+            raw_domain_keywords=result.get("raw_domain_keywords", []),
+            forecast_model=result.get("forecast_model", "prophet"),
+            history_days=result.get("history_days", 365),
+            forecast_horizon=result.get("forecast_horizon", 30),
+            reason=result.get("reason", ""),
+            out_of_scope_reply=result.get("out_of_scope_reply")
         )
 
-        full_content = ""
-        thinking_content = ""
-        in_json_block = False
+    def recognize_intent_streaming(
+        self,
+        user_query: str,
+        conversation_history: Optional[List[Dict[str, str]]] = None,
+        on_thinking_chunk: Optional[Callable[[str], None]] = None
+    ) -> Tuple[UnifiedIntent, str]:
+        """
+        流式意图识别 - 实时返回思考过程
 
-        for chunk in response:
-            if chunk.choices and chunk.choices[0].delta.content:
-                delta = chunk.choices[0].delta.content
-                full_content += delta
+        Args:
+            user_query: 用户问题
+            conversation_history: 对话历史
+            on_thinking_chunk: 回调函数，接收思考内容片段
 
-                # 检测 JSON 代码块
-                if "```json" in full_content and not in_json_block:
-                    in_json_block = True
-                    # 提取 JSON 之前的内容作为思考内容
-                    thinking_content = full_content.split("```json")[0].strip()
+        Returns:
+            (UnifiedIntent, 完整思考内容)
+        """
+        messages = self.build_messages(
+            user_content=f"用户问题: {user_query}\n\n请分析意图。",
+            system_prompt=self.STREAMING_SYSTEM_PROMPT,
+            conversation_history=conversation_history
+        )
 
-                if in_json_block:
-                    # 在 JSON 块中，不输出到思考内容
-                    pass
-                else:
-                    # 输出思考内容
-                    if on_thinking_chunk:
-                        on_thinking_chunk(delta)
+        # 使用状态变量跟踪是否进入 JSON 块
+        state = {"full_content": "", "in_json_block": False, "thinking_content": ""}
+
+        def _on_chunk(delta: str):
+            state["full_content"] += delta
+
+            if "```json" in state["full_content"] and not state["in_json_block"]:
+                state["in_json_block"] = True
+                state["thinking_content"] = state["full_content"].split("```json")[0].strip()
+
+            if not state["in_json_block"] and on_thinking_chunk:
+                on_thinking_chunk(delta)
+
+        full_content = self.call_llm(messages, stream=True, on_chunk=_on_chunk)
 
         # 提取 JSON 结果
         try:
@@ -327,18 +263,16 @@ class IntentAgent:
                     json_str = json_str.split("```")[0]
                 result = json.loads(json_str.strip())
             else:
-                # 尝试直接解析
                 result = json.loads(full_content)
         except json.JSONDecodeError:
-            # 解析失败，返回默认值
-            print(f"[IntentAgent] JSON 解析失败: {full_content}")
+            print(f"[{self.agent_name}] JSON 解析失败: {full_content}")
             result = {
                 "is_in_scope": True,
                 "is_forecast": False,
                 "reason": "解析失败，使用默认值"
             }
 
-        # 如果没有分离出思考内容，使用 reason
+        thinking_content = state["thinking_content"]
         if not thinking_content:
             thinking_content = result.get("reason", "")
 
@@ -363,7 +297,6 @@ class IntentAgent:
         Returns:
             ResolvedKeywords
         """
-        # 如果没有股票匹配结果，直接返回原始关键词
         if not stock_name and not stock_code:
             return ResolvedKeywords(
                 search_keywords=intent.raw_search_keywords,
@@ -371,12 +304,10 @@ class IntentAgent:
                 domain_keywords=intent.raw_domain_keywords
             )
 
-        # 有股票匹配结果，增强关键词
         search_keywords = list(intent.raw_search_keywords)
         rag_keywords = list(intent.raw_rag_keywords)
         domain_keywords = list(intent.raw_domain_keywords)
 
-        # 添加股票名称和代码
         if stock_name:
             if stock_name not in search_keywords:
                 search_keywords.insert(0, stock_name)
@@ -391,7 +322,6 @@ class IntentAgent:
             if stock_code not in domain_keywords:
                 domain_keywords.append(stock_code)
 
-        # 替换简称 (如果 stock_mention 存在且与 stock_name 不同)
         if intent.stock_mention and stock_name and intent.stock_mention != stock_name:
             for i, kw in enumerate(search_keywords):
                 if intent.stock_mention in kw:
@@ -428,49 +358,30 @@ class IntentAgent:
         Returns:
             回复文本或生成器
         """
-        system_prompt = """你是专业的金融分析助手。根据上下文和对话历史回答用户问题。
-
-要求：
-1. 回答简洁专业
-2. 如果引用了来源，使用 markdown 链接格式 [标题](url)
-3. 如果引用了研报，使用格式 [研报名称](rag://文件名.pdf#page=页码)
-4. 如果无法从上下文找到相关信息，如实说明"""
-
-        messages = [{"role": "system", "content": system_prompt}]
-
-        # 添加对话历史
-        if conversation_history:
-            recent_history = conversation_history[-10:] if len(conversation_history) > 10 else conversation_history
-            for msg in recent_history:
-                messages.append({
-                    "role": msg["role"],
-                    "content": msg["content"]
-                })
-
-        # 构建用户消息
         user_content = user_query
         if context:
             user_content = f"参考信息:\n{context}\n\n用户问题: {user_query}"
 
-        messages.append({"role": "user", "content": user_content})
+        messages = self.build_messages(
+            user_content=user_content,
+            system_prompt=self.CHAT_SYSTEM_PROMPT,
+            conversation_history=conversation_history,
+            history_window=10
+        )
 
         if stream:
             return self._stream_response(messages)
         else:
-            response = self.client.chat.completions.create(
-                model="deepseek-chat",
-                messages=messages,
-                temperature=0.3,
-            )
-            return response.choices[0].message.content
+            return self.call_llm(messages, temperature=0.3)
 
     def _stream_response(self, messages: List[Dict]) -> Generator[str, None, None]:
-        """流式响应"""
+        """流式响应 - 生成器模式"""
+        # 使用底层 client 直接调用以支持生成器模式
         response = self.client.chat.completions.create(
-            model="deepseek-chat",
+            model=self.model,
             messages=messages,
             temperature=0.3,
-            stream=True,
+            stream=True
         )
 
         for chunk in response:

@@ -5,51 +5,41 @@ Error Explainer Agent 模块
 负责将技术错误转换为用户友好的解释
 """
 
-from openai import OpenAI
+from .base import BaseAgent
 from app.data.fetcher import DataFetchError
 
 
-class ErrorExplainerAgent:
+class ErrorExplainerAgent(BaseAgent):
     """错误解释 Agent - 将技术错误转换为友好的用户解释"""
-    
-    def __init__(self, api_key: str):
-        """
-        初始化 Error Explainer Agent
-        
-        Args:
-            api_key: DeepSeek API Key
-        """
-        self.client = OpenAI(
-            api_key=api_key,
-            base_url="https://api.deepseek.com"
-        )
-    
+
+    DEFAULT_TEMPERATURE = 0.7
+
+    SYSTEM_PROMPT = "你是小易，一个专业且友好的金融分析助手。你擅长用简单易懂的方式解释技术问题，并给出实用建议。"
+
+    ERROR_CONTEXT_MAP = {
+        "invalid_code": "股票代码不存在或格式错误",
+        "network": "网络连接问题",
+        "permission": "数据访问权限受限",
+        "unknown": "数据获取失败"
+    }
+
     def explain_data_fetch_error(
-        self, 
-        error: DataFetchError, 
+        self,
+        error: DataFetchError,
         user_query: str
     ) -> str:
         """
         生成友好的错误解释和建议
-        
+
         Args:
             error: DataFetchError 实例
             user_query: 用户原始问题
-            
+
         Returns:
             Markdown 格式的友好解释（200-300字）
         """
-        # 错误类型中文描述
-        error_context_map = {
-            "invalid_code": "股票代码不存在或格式错误",
-            "network": "网络连接问题",
-            "permission": "数据访问权限受限",
-            "unknown": "数据获取失败"
-        }
-        
-        error_context = error_context_map.get(error.error_type, "数据获取失败")
-        
-        # 构建 prompt
+        error_context = self.ERROR_CONTEXT_MAP.get(error.error_type, "数据获取失败")
+
         prompt = f"""用户尝试执行的问题: "{user_query}"
 
 数据获取失败了:
@@ -78,39 +68,31 @@ class ErrorExplainerAgent:
 - 不要过度道歉
 """
 
-        try:
-            response = self.client.chat.completions.create(
-                model="deepseek-chat",
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "你是小易，一个专业且友好的金融分析助手。你擅长用简单易懂的方式解释技术问题，并给出实用建议。"
-                    },
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.7,
-            )
-            
-            return response.choices[0].message.content
-            
-        except Exception as e:
-            # LLM 调用失败时的 fallback
-            print(f"⚠️ Error explainer LLM failed: {e}")
+        messages = self.build_messages(
+            user_content=prompt,
+            system_prompt=self.SYSTEM_PROMPT
+        )
+
+        content = self.call_llm(messages, fallback=None)
+
+        if content is None:
             return self._fallback_explanation(error, user_query)
-    
+
+        return content
+
     def _fallback_explanation(self, error: DataFetchError, user_query: str) -> str:
         """
         当 LLM 调用失败时的备用解释
-        
+
         Args:
             error: DataFetchError 实例
             user_query: 用户原始问题
-            
+
         Returns:
             简单的错误解释
         """
         symbol = error.context.get('symbol', '未知')
-        
+
         if error.error_type == "invalid_code":
             return f"""抱歉，无法获取 "{symbol}" 的数据。
 
@@ -124,7 +106,7 @@ class ErrorExplainerAgent:
 - 或者试试这些热门股票：600519（贵州茅台）、000001（平安银行）"""
 
         elif error.error_type == "network":
-            return f"""抱歉，数据获取遇到网络问题。
+            return """抱歉，数据获取遇到网络问题。
 
 **建议：**
 - 请稍后重试
@@ -132,7 +114,7 @@ class ErrorExplainerAgent:
 - 如问题持续，可能是数据源暂时不可用"""
 
         elif error.error_type == "permission":
-            return f"""抱歉，数据访问受限。
+            return """抱歉，数据访问受限。
 
 **可能原因：**
 - API 请求频率限制

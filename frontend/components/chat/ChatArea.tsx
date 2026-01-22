@@ -1,13 +1,13 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
+import { useRouter } from 'next/navigation'
 import Image from 'next/image'
-import { Download, Share2, MoreVertical, Paperclip, Send, Zap, ChevronDown, ChevronRight } from 'lucide-react'
+import { Download, Share2, MoreVertical, Send } from 'lucide-react'
 import { MessageBubble } from './MessageBubble'
 import { QuickSuggestions } from './QuickSuggestions'
 import { AnalysisCards } from './AnalysisCards'
-import { cn } from '@/lib/utils'
-import type { RAGSource, ThinkingLogEntry } from '@/lib/api/analysis'
+import type { RAGSource, ThinkingLogEntry, TimeSeriesPoint, NewsItem, MessageData } from '@/lib/api/analysis'
 
 // 步骤状态
 export type StepStatus = 'pending' | 'running' | 'completed' | 'failed'
@@ -129,35 +129,23 @@ const defaultQuickSuggestions = [
   '生成一份投资分析报告',
 ]
 
-// 从 localStorage 获取或生成 session_id
-function getOrCreateSessionId(): string {
-  if (typeof window === 'undefined') return ''
-
-  const stored = localStorage.getItem('chat_session_id')
-  if (stored) {
-    return stored
-  }
-
-  // 生成新的 session_id
-  const newSessionId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
-  localStorage.setItem('chat_session_id', newSessionId)
-  return newSessionId
-}
-
 interface ChatAreaProps {
   sessionId: string | null
+  onSessionCreated?: (sessionId: string) => void
 }
 
-export function ChatArea({ sessionId: externalSessionId }: ChatAreaProps) {
+export function ChatArea({ sessionId: externalSessionId, onSessionCreated }: ChatAreaProps) {
+  const router = useRouter()
   const [messages, setMessages] = useState<Message[]>([])
   const [inputValue, setInputValue] = useState('')
   const [isLoading, setIsLoading] = useState(false)
-  const [sessionId, setSessionId] = useState<string>(() => externalSessionId || getOrCreateSessionId())
+  const [sessionId, setSessionId] = useState<string | null>(externalSessionId)
   const [quickSuggestions, setQuickSuggestions] = useState<string[]>(defaultQuickSuggestions)
 
   // 对话模式动画状态 (针对最后一条消息)
   const [lastMessageConversationalMode, setLastMessageConversationalMode] = useState(false)
-  const [lastMessageCollapsing, setLastMessageCollapsing] = useState(false)
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const [_lastMessageCollapsing, setLastMessageCollapsing] = useState(false)  // 保留用于未来动画实现
 
   // 对话区域滚动容器 ref
   const chatContainerRef = useRef<HTMLDivElement>(null)
@@ -165,12 +153,18 @@ export function ChatArea({ sessionId: externalSessionId }: ChatAreaProps) {
   // 跟踪当前消息是否已经滚动过（用于控制只滚动两次：发送时+开始产生内容时）
   const hasScrolledForContentRef = useRef(false)
 
-  // 防止 React 严格模式下重复加载历史
-  const historyLoadedRef = useRef(false)
+  // AbortController 用于取消旧请求（切换会话时）
+  const abortControllerRef = useRef<AbortController | null>(null)
 
-  // 跟踪当前活跃的轮询消息（支持多会话并发）
-  // Key: sessionId, Value: messageId
-  const activePollingMapRef = useRef<Map<string, string>>(new Map())
+  // 用于在 effect 中访问最新的 isLoading 状态（避免闭包问题）
+  const isLoadingRef = useRef(isLoading)
+  isLoadingRef.current = isLoading
+
+  // 标记 sessionId 变化来源：'handleSend' 表示由 handleSend 触发，不需要 abort
+  const sessionChangeSourceRef = useRef<'handleSend' | null>(null)
+
+  // 是否正在加载历史记录（如果有 sessionId，初始就是加载状态）
+  const [isLoadingHistory, setIsLoadingHistory] = useState(!!externalSessionId)
 
   // 自动滚动到底部
   const scrollToBottom = () => {
@@ -217,74 +211,288 @@ export function ChatArea({ sessionId: externalSessionId }: ChatAreaProps) {
     }
   }, [messages])
 
-  // 构建对话历史（从 messages 中提取）
-  const buildHistory = (): Array<{ role: string; content: string }> => {
-    const history: Array<{ role: string; content: string }> = []
+  // 同步 externalSessionId 到内部 sessionId
+  useEffect(() => {
+    // 当 externalSessionId 变化时，同步到内部状态
+    if (externalSessionId !== sessionId) {
+      setSessionId(externalSessionId)
+    }
+  }, [externalSessionId]) // 只监听 externalSessionId
 
-    for (const msg of messages) {
-      if (msg.role === 'user' && msg.text) {
-        history.push({ role: 'user', content: msg.text })
-      } else if (msg.role === 'assistant' && msg.contents) {
-        // 提取助手回复的文本内容
-        const textContents = msg.contents.filter(c => c.type === 'text') as TextContent[]
-        if (textContents.length > 0) {
-          const combinedText = textContents.map(c => c.text).join('\n\n')
-          history.push({ role: 'assistant', content: combinedText })
-        }
+  // 当 sessionId 变化时，同步到 URL
+  useEffect(() => {
+    if (sessionId) {
+      const currentUrl = new URL(window.location.href)
+      if (currentUrl.searchParams.get('session') !== sessionId) {
+        router.replace(`/?session=${sessionId}`, { scroll: false })
       }
     }
+  }, [sessionId, router])
 
-    return history
+  // 创建流式回调的工厂函数（共享逻辑）
+  const createStreamCallbacks = (
+    assistantMessageId: string,
+    backendSessionId: string,
+    backendMessageId: string,
+    options: { enableScrollOnFirstContent?: boolean } = {}
+  ) => {
+    // 累积的数据状态
+    let accumulatedTimeSeriesOriginal: TimeSeriesPoint[] = []
+    let accumulatedTimeSeriesFull: TimeSeriesPoint[] = []
+    let accumulatedNews: NewsItem[] = []
+    let accumulatedEmotion: { score: number; description: string } | null = null
+    let predictionStartDay = ''
+
+    return {
+      // 恢复数据（断点续传时使用）
+      onResume: (currentData: MessageData) => {
+        if (currentData) {
+          if (currentData.time_series_original) {
+            accumulatedTimeSeriesOriginal = currentData.time_series_original
+          }
+          if (currentData.time_series_full) {
+            accumulatedTimeSeriesFull = currentData.time_series_full
+          }
+          if (currentData.news_list) {
+            accumulatedNews = currentData.news_list
+          }
+          if (currentData.emotion !== null && currentData.emotion !== undefined) {
+            accumulatedEmotion = { score: currentData.emotion, description: currentData.emotion_des || '中性' }
+          }
+          predictionStartDay = currentData.prediction_start_day || ''
+          updateContentsFromStreamData(
+            assistantMessageId,
+            accumulatedTimeSeriesOriginal,
+            accumulatedTimeSeriesFull.length > 0 ? accumulatedTimeSeriesFull : null,
+            accumulatedNews,
+            accumulatedEmotion,
+            currentData.conclusion || null,
+            predictionStartDay,
+            backendSessionId,
+            backendMessageId
+          )
+        }
+      },
+
+      // 步骤开始
+      onStepStart: (step: number, stepName: string) => {
+        const steps = PREDICTION_STEPS.map((s, idx) => {
+          const stepNum = idx + 1
+          if (stepNum < step) {
+            return { ...s, status: 'completed' as StepStatus }
+          } else if (stepNum === step) {
+            return { ...s, status: 'running' as StepStatus, message: `${stepName}中...` }
+          }
+          return { ...s, status: 'pending' as StepStatus }
+        })
+
+        setMessages((prev: Message[]) => prev.map((msg: Message) =>
+          msg.id === assistantMessageId
+            ? { ...msg, steps }
+            : msg
+        ))
+      },
+
+      // 步骤完成
+      onStepComplete: (step: number) => {
+        const steps = PREDICTION_STEPS.map((s, idx) => {
+          const stepNum = idx + 1
+          if (stepNum <= step) {
+            return { ...s, status: 'completed' as StepStatus, message: '已完成' }
+          }
+          return { ...s, status: 'pending' as StepStatus }
+        })
+
+        setMessages((prev: Message[]) => prev.map((msg: Message) =>
+          msg.id === assistantMessageId
+            ? { ...msg, steps }
+            : msg
+        ))
+      },
+
+      // 思考内容（累积）
+      onThinking: (content: string) => {
+        // 第一次收到内容时滚动一次（仅新消息需要）
+        if (options.enableScrollOnFirstContent && !hasScrolledForContentRef.current && content.length > 0) {
+          hasScrolledForContentRef.current = true
+          setTimeout(scrollToBottom, 50)
+        }
+        setMessages((prev: Message[]) => prev.map((msg: Message) =>
+          msg.id === assistantMessageId
+            ? { ...msg, thinkingContent: content }
+            : msg
+        ))
+      },
+
+      // 意图识别结果
+      onIntent: (_intent: string, isForecast: boolean) => {
+        const renderMode: RenderMode = isForecast ? 'forecast' : 'chat'
+        setMessages((prev: Message[]) => prev.map((msg: Message) =>
+          msg.id === assistantMessageId
+            ? { ...msg, renderMode }
+            : msg
+        ))
+      },
+
+      // 结构化数据
+      onData: (dataType: string, data: unknown, predStart?: string) => {
+        if (dataType === 'time_series_original') {
+          accumulatedTimeSeriesOriginal = data as TimeSeriesPoint[]
+          updateContentsFromStreamData(assistantMessageId, accumulatedTimeSeriesOriginal, null, accumulatedNews, accumulatedEmotion, null, '', backendSessionId, backendMessageId)
+        } else if (dataType === 'time_series_full') {
+          accumulatedTimeSeriesFull = data as TimeSeriesPoint[]
+          predictionStartDay = predStart || ''
+          updateContentsFromStreamData(assistantMessageId, accumulatedTimeSeriesOriginal, accumulatedTimeSeriesFull, accumulatedNews, accumulatedEmotion, null, predictionStartDay, backendSessionId, backendMessageId)
+        } else if (dataType === 'news') {
+          accumulatedNews = data as NewsItem[]
+          updateContentsFromStreamData(assistantMessageId, accumulatedTimeSeriesOriginal, accumulatedTimeSeriesFull.length > 0 ? accumulatedTimeSeriesFull : null, accumulatedNews, accumulatedEmotion, null, predictionStartDay, backendSessionId, backendMessageId)
+        } else if (dataType === 'emotion') {
+          const emotionData = data as { score: number; description: string }
+          accumulatedEmotion = emotionData
+          updateContentsFromStreamData(assistantMessageId, accumulatedTimeSeriesOriginal, accumulatedTimeSeriesFull.length > 0 ? accumulatedTimeSeriesFull : null, accumulatedNews, accumulatedEmotion, null, predictionStartDay, backendSessionId, backendMessageId)
+        }
+      },
+
+      // 报告流式（累积）
+      onReportChunk: (content: string) => {
+        updateContentsFromStreamData(assistantMessageId, accumulatedTimeSeriesOriginal, accumulatedTimeSeriesFull.length > 0 ? accumulatedTimeSeriesFull : null, accumulatedNews, accumulatedEmotion, content, predictionStartDay, backendSessionId, backendMessageId)
+      },
+
+      // 聊天流式（累积）
+      onChatChunk: (content: string) => {
+        setMessages((prev: Message[]) => prev.map((msg: Message) =>
+          msg.id === assistantMessageId
+            ? {
+              ...msg,
+              contents: [{
+                type: 'text',
+                text: content
+              }],
+              renderMode: 'chat' as RenderMode
+            }
+            : msg
+        ))
+      },
+
+      // 情绪分析流式（累积）- 实时更新描述文本
+      onEmotionChunk: (content: string) => {
+        // 流式接收时，score 先设为 0，等 data 事件传完整结果
+        accumulatedEmotion = { score: accumulatedEmotion?.score ?? 0, description: content }
+        updateContentsFromStreamData(
+          assistantMessageId,
+          accumulatedTimeSeriesOriginal,
+          accumulatedTimeSeriesFull.length > 0 ? accumulatedTimeSeriesFull : null,
+          accumulatedNews,
+          accumulatedEmotion,
+          null,
+          predictionStartDay,
+          backendSessionId,
+          backendMessageId
+        )
+      },
+
+      // 完成
+      onDone: () => {
+        setMessages((prev: Message[]) => prev.map((msg: Message) =>
+          msg.id === assistantMessageId
+            ? { ...msg, steps: undefined }
+            : msg
+        ))
+        setIsLoading(false)
+      },
+
+      // 错误
+      onError: (errorMsg: string) => {
+        console.error('Stream error:', errorMsg)
+        setMessages((prev: Message[]) => prev.map((msg: Message) =>
+          msg.id === assistantMessageId
+            ? {
+              ...msg,
+              contents: [{
+                type: 'text',
+                text: errorMsg || '抱歉，处理请求时出现错误，请稍后重试。'
+              }],
+              steps: undefined
+            }
+            : msg
+        ))
+        setIsLoading(false)
+      }
+    }
   }
 
-  // 当外部 sessionId 变化时，更新内部状态
-  useEffect(() => {
-    // 只在真正切换会话时才处理（externalSessionId变化）
-    // 不处理内部sessionId的自然更新（如发送首条消息时）
-    if (externalSessionId && externalSessionId !== sessionId) {
-      console.log('[ChatArea] Switching to session:', externalSessionId)
-      setSessionId(externalSessionId)
-      // 不立即清空messages，让loadSessionHistory处理
-      historyLoadedRef.current = false
-      // 清除这个会话的轮询跟踪（但不影响其他会话）
-      if (sessionId) {
-        activePollingMapRef.current.delete(sessionId)
+  // 恢复进行中消息的流式接收
+  const resumeStreamForMessage = async (
+    backendMessageId: string,
+    currentSessionId: string,
+    assistantMessageId: string,
+    signal?: AbortSignal
+  ) => {
+    try {
+      setIsLoading(true)
+      const { resumeStream } = await import('@/lib/api/analysis')
+      const callbacks = createStreamCallbacks(assistantMessageId, currentSessionId, backendMessageId)
+      await resumeStream(currentSessionId, backendMessageId, callbacks, undefined, signal)
+    } catch (error: unknown) {
+      // 忽略取消错误
+      if (error instanceof Error && error.name === 'AbortError') {
+        return
       }
-    } else if (externalSessionId === null && sessionId) {
-      // 新建会话（用户点击New Chat）
-      console.log('[ChatArea] Creating new session')
-      const newSessionId = getOrCreateSessionId()
-      setSessionId(newSessionId)
-      setMessages([]) // 新会话才清空
-      historyLoadedRef.current = false
-      // 清除旧会话的轮询跟踪
-      if (sessionId) {
-        activePollingMapRef.current.delete(sessionId)
-      }
+      console.error('恢复流式接收失败:', error)
+      setIsLoading(false)
     }
-  }, [externalSessionId]) // 只监听externalSessionId，不监听sessionId
+  }
 
-  // 页面加载时恢复会话历史
+  // 页面加载时恢复会话历史（每次 sessionId 变化都重新加载）
   useEffect(() => {
-    const loadSessionHistory = async () => {
-      // 防止 React 严格模式下重复加载
-      if (historyLoadedRef.current) return
-      historyLoadedRef.current = true
+    // 检查 sessionId 变化来源
+    const changeSource = sessionChangeSourceRef.current
+    sessionChangeSourceRef.current = null  // 重置
 
-      if (!sessionId) return
+    // ✅ 只有外部触发的 sessionId 变化（用户切换会话）才 abort 旧请求
+    // handleSend 触发的变化不需要 abort，因为 handleSend 自己管理 AbortController
+    if (changeSource !== 'handleSend' && abortControllerRef.current) {
+      abortControllerRef.current.abort()
+    }
+
+    // 如果正在发送消息，跳过加载历史（handleSend 会自己处理）
+    if (isLoadingRef.current) {
+      setIsLoadingHistory(false)
+      return
+    }
+
+    // 创建新的 AbortController
+    const abortController = new AbortController()
+    abortControllerRef.current = abortController
+
+    const loadSessionHistory = async () => {
+      // 如果没有 sessionId，清空消息（新会话状态）
+      if (!sessionId) {
+        setMessages([])
+        setIsLoadingHistory(false)
+        return
+      }
+
+      setIsLoadingHistory(true)
 
       try {
         const { getSessionHistory } = await import('@/lib/api/analysis')
-        const history = await getSessionHistory(sessionId)
+        const history = await getSessionHistory(sessionId, abortController.signal)
+
+        // 如果请求被取消，直接返回
+        if (abortController.signal.aborted) {
+          return
+        }
 
         // 将后端历史消息转换为前端 Message 格式
-        // 只加载已完成的消息，跳过 processing/pending 状态的消息
         const loadedMessages: Message[] = []
+        // 收集需要恢复流式接收的消息
+        const messagesToResume: Array<{ messageId: string; assistantMessageId: string }> = []
 
         if (history && history.messages && history.messages.length > 0) {
           for (const historyMsg of history.messages) {
-            // 只处理已完成的消息
-            if (historyMsg.status !== 'completed' || !historyMsg.data) {
+            // 跳过没有数据的消息
+            if (!historyMsg.data) {
               continue
             }
 
@@ -298,39 +506,93 @@ export function ChatArea({ sessionId: externalSessionId }: ChatAreaProps) {
               timestamp: new Date(data.created_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
             })
 
-            // 添加助手消息
             const isForecastIntent = data.intent === 'forecast' ||
               (data.unified_intent && data.unified_intent.is_forecast)
+            const assistantMessageId = `assistant-${historyMsg.message_id}`
 
-            // 转换内容
-            const contents = convertAnalysisToContents(data, data.steps, 'completed')
+            if (historyMsg.status === 'completed') {
+              // 已完成的消息：直接渲染
+              const contents = convertAnalysisToContents(data, data.steps, 'completed')
 
-            loadedMessages.push({
-              id: `assistant-${historyMsg.message_id}`,
-              role: 'assistant',
-              timestamp: new Date(data.updated_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
-              contents: contents.length > 0 ? contents : [{
-                type: 'text',
-                text: data.conclusion || '已完成分析'
-              }],
-              renderMode: isForecastIntent ? 'forecast' : 'chat',
-              ragSources: data.rag_sources || [], // RAG 研报来源
-              thinkingLogs: data.thinking_logs || [], // 思考日志
-            })
+              loadedMessages.push({
+                id: assistantMessageId,
+                role: 'assistant',
+                timestamp: new Date(data.updated_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
+                contents: contents.length > 0 ? contents : [{
+                  type: 'text',
+                  text: data.conclusion || '已完成分析'
+                }],
+                renderMode: isForecastIntent ? 'forecast' : 'chat',
+                ragSources: data.rag_sources || [],
+                thinkingLogs: data.thinking_logs || [],
+              })
+            } else if (historyMsg.status === 'processing' || historyMsg.status === 'pending') {
+              // 进行中的消息：先显示已有数据，然后调用 resumeStream 继续接收
+              const currentStep = data.steps || 0
+              const contents = convertAnalysisToContents(data, currentStep, 'processing')
+
+              // 构建步骤状态
+              const steps = convertSteps(currentStep, 6, 'processing')
+
+              loadedMessages.push({
+                id: assistantMessageId,
+                role: 'assistant',
+                timestamp: new Date(data.updated_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
+                contents: contents.length > 0 ? contents : [],
+                steps: steps,
+                renderMode: isForecastIntent ? 'forecast' : 'thinking',
+                ragSources: data.rag_sources || [],
+                thinkingLogs: data.thinking_logs || [],
+              })
+
+              // 记录需要恢复的消息
+              messagesToResume.push({
+                messageId: historyMsg.message_id,
+                assistantMessageId: assistantMessageId
+              })
+            }
           }
         }
 
         // 无论是否有历史，都更新messages（确保切换到空会话时清空）
         setMessages(loadedMessages)
-      } catch (error) {
+        setIsLoadingHistory(false)
+
+        // 加载历史后滚动到底部
+        if (loadedMessages.length > 0) {
+          setTimeout(scrollToBottom, 100)
+        }
+
+        // 异步恢复进行中的消息（不阻塞渲染）
+        for (const { messageId, assistantMessageId } of messagesToResume) {
+          resumeStreamForMessage(messageId, sessionId, assistantMessageId, abortController.signal)
+        }
+      } catch (error: unknown) {
+        // 如果是取消请求导致的错误，直接忽略
+        if (error instanceof Error && error.name === 'AbortError') {
+          return
+        }
+
+        setIsLoadingHistory(false)
         console.error('加载会话历史失败:', error)
-        // 加载失败时也清空消息，避免显示错误的内容
-        setMessages([])
+
+        // 区分 404（会话不存在）和网络错误
+        const errorMessage = error instanceof Error ? error.message : String(error)
+        if (errorMessage.includes('404') || errorMessage.includes('not found') || errorMessage.includes('Not Found')) {
+          console.log('[ChatArea] Session not found (404), clearing messages')
+          setMessages([])
+        }
+        // 网络错误时不清空消息，保留现有内容
       }
     }
 
     loadSessionHistory()
-  }, [sessionId]) // 依赖 sessionId，当 sessionId 变化时重新加载
+
+    // 组件卸载或 sessionId 变化时取消请求
+    return () => {
+      abortController.abort()
+    }
+  }, [sessionId])
 
   // 更新快速追问建议（在对话完成后）
   useEffect(() => {
@@ -374,7 +636,7 @@ export function ChatArea({ sessionId: externalSessionId }: ChatAreaProps) {
     })
   }
 
-  // 将 AnalysisStatusResponse 转换为前端的 contents
+  // 将后端返回的数据转换为前端的 contents
   const convertAnalysisToContents = (
     data: {
       time_series_original?: Array<{ date: string; value: number; is_prediction: boolean }>
@@ -435,17 +697,6 @@ export function ChatArea({ sessionId: externalSessionId }: ChatAreaProps) {
     const isCompleted = status === 'completed' || currentStep >= 6
 
     // 1. 市场情绪（步骤4"分析处理"完成后显示）
-    // DEBUG: 输出情绪数据用于调试
-    const hasValidEmotion_debug = typeof data.emotion === 'number'
-    const hasEmotionDes_debug = data.emotion_des !== null && data.emotion_des !== undefined
-    console.log('[Emotion Debug]', {
-      currentStep,
-      isCompleted,
-      emotion: data.emotion,
-      emotion_des: data.emotion_des,
-      willAddEmotion: (currentStep >= 4 || isCompleted) && hasValidEmotion_debug && hasEmotionDes_debug,
-      conditions: { hasValidEmotion: hasValidEmotion_debug, hasEmotionDes: hasEmotionDes_debug }
-    })
     if (currentStep >= 4 || isCompleted) {
       // emotion_des 可能是空字符串，需要使用严格的 null/undefined 检查
       const hasValidEmotion = typeof data.emotion === 'number'
@@ -595,6 +846,14 @@ export function ChatArea({ sessionId: externalSessionId }: ChatAreaProps) {
     // 重置滚动标记，准备在收到内容时再滚动一次
     hasScrolledForContentRef.current = false
 
+    // 创建新的 AbortController 并更新 ref（覆盖 useEffect 创建的）
+    // 这样 handleSend 接管控制权，后续 setSessionId 触发的 useEffect 会因为 isLoadingRef 而跳过
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort()
+    }
+    const sendAbortController = new AbortController()
+    abortControllerRef.current = sendAbortController
+
     // 创建AI消息占位符（清空旧内容）
     const assistantMessageId = (Date.now() + 1).toString()
     const assistantMessage: Message = {
@@ -608,8 +867,8 @@ export function ChatArea({ sessionId: externalSessionId }: ChatAreaProps) {
     setMessages((prev: Message[]) => [...prev, assistantMessage])
 
     try {
-      // 使用 analysis API - 流式获取思考内容
-      const { streamAnalysisTask, pollAnalysisStatus, getAnalysisStatus } = await import('@/lib/api/analysis')
+      // 使用 create + resumeStream 模式（后端任务独立运行，不依赖前端连接）
+      const { createAnalysis, resumeStream } = await import('@/lib/api/analysis')
       const { createSession } = await import('@/lib/api/sessions')
 
       // 确保 session 存在（后端要求 session_id 必填）
@@ -617,165 +876,42 @@ export function ChatArea({ sessionId: externalSessionId }: ChatAreaProps) {
       if (!activeSessionId) {
         const newSession = await createSession()
         activeSessionId = newSession.session_id
+        // 标记这是 handleSend 触发的 sessionId 变化，useEffect 不应该 abort
+        sessionChangeSourceRef.current = 'handleSend'
         setSessionId(activeSessionId)
-        if (typeof window !== 'undefined') {
-          localStorage.setItem('chat_session_id', activeSessionId)
-        }
+        // URL 会通过 useEffect 自动更新
       }
 
-      // 阶段1: 使用 SSE 流式获取思考内容
-      const { session_id: currentSessionId, message_id: currentMessageId } = await streamAnalysisTask(
-        messageToSend,
-        {
-          // 实时更新思考内容
-          onThinking: (content: string) => {
-            // 第一次收到内容时滚动一次
-            if (!hasScrolledForContentRef.current && content.length > 0) {
-              hasScrolledForContentRef.current = true
-              setTimeout(scrollToBottom, 50)
-            }
-            setMessages((prev: Message[]) => prev.map((msg: Message) =>
-              msg.id === assistantMessageId
-                ? { ...msg, thinkingContent: content }
-                : msg
-            ))
-          },
-          // 收到意图后更新渲染模式
-          onIntent: (intent: string, isForecast: boolean) => {
-            const renderMode: RenderMode = isForecast ? 'forecast' : 'chat'
-            setMessages((prev: Message[]) => prev.map((msg: Message) =>
-              msg.id === assistantMessageId
-                ? { ...msg, renderMode }
-                : msg
-            ))
-          },
-          // 错误处理
-          onError: (errorMsg: string) => {
-            console.error('Stream error:', errorMsg)
-          }
-        },
-        'prophet',
-        '',
-        sessionId
+      // Step 1: 创建后台任务
+      const createResult = await createAnalysis(messageToSend, {
+        model: 'prophet',
+        sessionId: activeSessionId
+      })
+
+      // 标记这是 handleSend 触发的 sessionId 变化，useEffect 不应该 abort
+      sessionChangeSourceRef.current = 'handleSend'
+      setSessionId(createResult.session_id)
+
+      // 通知父组件会话已创建（立即刷新侧边栏并高亮显示）
+      if (onSessionCreated) {
+        onSessionCreated(createResult.session_id)
+      }
+
+      // Step 2: 通过 resumeStream 流式获取结果（使用共享回调）
+      const callbacks = createStreamCallbacks(
+        assistantMessageId,
+        createResult.session_id,
+        createResult.message_id,
+        { enableScrollOnFirstContent: true }
       )
+      // 使用 handleSend 自己的 AbortController，不受 useEffect sessionId 变化影响
+      await resumeStream(createResult.session_id, createResult.message_id, callbacks, undefined, sendAbortController.signal)
 
-      // 更新 sessionId（首次创建或复用）
-      setSessionId(currentSessionId)
-      if (typeof window !== 'undefined') {
-        localStorage.setItem('chat_session_id', currentSessionId)
+    } catch (error: unknown) {
+      // 忽略取消错误（切换会话时正常行为）
+      if (error instanceof Error && error.name === 'AbortError') {
+        return
       }
-
-      // 设置当前活跃的轮询任务（支持多会话）
-      activePollingMapRef.current.set(currentSessionId, currentMessageId)
-      console.log('[ChatArea] Started polling for session:', currentSessionId, 'message:', currentMessageId)
-
-      // 阶段2: 流结束后，查询一次状态判断是否需要轮询
-      const initialStatus = await getAnalysisStatus(currentSessionId, currentMessageId)
-
-      // 如果任务已完成（如简单问答），直接显示结果
-      if (initialStatus.status === 'completed') {
-        const { data } = initialStatus
-
-        // 简单问答：只显示文本内容，renderMode 为 chat（保留 thinkingContent 和 thinkingLogs）
-        setMessages((prev: Message[]) => prev.map((msg: Message) =>
-          msg.id === assistantMessageId
-            ? {
-              ...msg,
-              contents: [{
-                type: 'text',
-                text: data.conclusion || '已收到回答'
-              }],
-              steps: undefined,
-              renderMode: 'chat' as RenderMode,
-              thinkingLogs: data.thinking_logs || msg.thinkingLogs || []
-            }
-            : msg
-        ))
-      } else {
-        // 轮询状态（使用 message_id 确保轮询正确的消息）
-        await pollAnalysisStatus(
-          currentSessionId,
-          currentMessageId,
-          (statusResponse) => {
-            // 检查这个轮询是否还是active的（避免切换会话后继续更新）
-            const activeMessageId = activePollingMapRef.current.get(currentSessionId)
-            if (activeMessageId !== currentMessageId) {
-              console.log('[Poll] Skipping update for session:', currentSessionId, 'message:', currentMessageId, 'active:', activeMessageId)
-              return
-            }
-            const { data, steps: currentStep, status } = statusResponse
-
-            // DEBUG: 输出轮询响应数据
-            console.log('[Poll Debug] statusResponse:', {
-              currentStep,
-              status,
-              intent: data.intent,
-              emotion: data.emotion,
-              emotion_des: data.emotion_des,
-              hasTimeSeries: data.time_series_full?.length || 0,
-              hasNews: data.news_list?.length || 0
-            })
-
-            // 🎯 根据后端返回的 intent 决定渲染模式
-            const isForecastIntent = data.intent === 'forecast' ||
-              (data.unified_intent && data.unified_intent.is_forecast)
-
-            // 确定渲染模式
-            let currentRenderMode: RenderMode = 'thinking'
-            if (data.intent && data.intent !== 'pending') {
-              currentRenderMode = isForecastIntent ? 'forecast' : 'chat'
-            }
-
-            // 判断是否是简单问答（非 forecast 意图，只有 conclusion）
-            const isSimpleAnswer = !isForecastIntent && status === 'completed' && data.conclusion
-
-            if (isSimpleAnswer) {
-              // 简单问答：只显示文本内容，renderMode 为 chat（保留 thinkingContent 和 thinkingLogs）
-              setMessages((prev: Message[]) => prev.map((msg: Message) =>
-                msg.id === assistantMessageId
-                  ? {
-                    ...msg,
-                    contents: [{
-                      type: 'text',
-                      text: data.conclusion
-                    }],
-                    steps: undefined,
-                    renderMode: 'chat' as RenderMode,
-                    thinkingLogs: data.thinking_logs || msg.thinkingLogs || []
-                  }
-                  : msg
-              ))
-            } else {
-              // 预测分析：显示完整分析结果
-              // 转换步骤
-              const steps = convertSteps(currentStep, data.total_steps || 6, status)
-
-              // 转换内容（传入当前步骤和状态，只显示已完成步骤的内容）
-              const contents = convertAnalysisToContents(data, currentStep, status)
-
-              // DEBUG: 输出转换后的 contents
-              console.log('[Poll Debug] converted contents:', contents.map(c => ({ type: c.type, hasEmotion: c.type === 'text' && c.text?.startsWith('__EMOTION_MARKER__') })))
-
-              // 更新消息（保留 thinkingContent，添加 ragSources 和 thinkingLogs）
-              setMessages((prev: Message[]) => prev.map((msg: Message) =>
-                msg.id === assistantMessageId
-                  ? {
-                    ...msg,
-                    steps: status === 'completed' ? undefined : steps, // 完成后隐藏步骤
-                    contents: contents.length > 0 ? contents : [], // 清空旧内容，避免显示上次的数据
-                    renderMode: currentRenderMode, // 根据 intent 设置渲染模式
-                    ragSources: data.rag_sources || [], // RAG 研报来源
-                    thinkingLogs: data.thinking_logs || msg.thinkingLogs || [] // 累积的思考日志（保留已有的）
-                  }
-                  : msg
-              ))
-            }
-          },
-          500 // 轮询间隔 500ms (推荐)
-        )
-      }
-
-    } catch (error) {
       console.error('发送消息失败:', error)
       // 更新消息显示错误
       setMessages((prev: Message[]) => prev.map((msg: Message) =>
@@ -793,6 +929,106 @@ export function ChatArea({ sessionId: externalSessionId }: ChatAreaProps) {
     } finally {
       setIsLoading(false)
     }
+  }
+
+  // 辅助函数：根据流式数据更新 contents
+  const updateContentsFromStreamData = (
+    messageId: string,
+    timeSeriesOriginal: TimeSeriesPoint[],
+    timeSeriesFull: TimeSeriesPoint[] | null,
+    news: NewsItem[],
+    emotion: { score: number; description: string } | null,
+    conclusion: string | null,
+    _predictionStart: string,  // 保留参数用于未来可能的扩展
+    backendSessionId?: string,  // 用于回测功能
+    backendMessageId?: string   // 用于回测功能
+  ) => {
+    setMessages((prev: Message[]) => prev.map((msg: Message) => {
+      if (msg.id !== messageId) return msg
+
+      const newContents: (TextContent | ChartContent | TableContent)[] = []
+
+      // 1. 情绪（如果有）
+      if (emotion) {
+        newContents.push({
+          type: 'text',
+          text: `__EMOTION_MARKER__${emotion.score}__${emotion.description}__`
+        })
+      }
+
+      // 2. 新闻表格（如果有）
+      if (news.length > 0) {
+        newContents.push({
+          type: 'table',
+          title: '',
+          headers: ['标题', '来源', '时间'],
+          rows: news.slice(0, 10).map((n) => [
+            n.url ? `[${n.summarized_title}](${n.url})` : n.summarized_title,
+            n.source_name || (n.source_type === 'search' ? '网络' : '资讯'),
+            n.published_date
+          ])
+        })
+      }
+
+      // 3. 图表
+      if (timeSeriesFull && timeSeriesFull.length > 0) {
+        // 完整图表（历史 + 预测）
+        const originalLength = timeSeriesOriginal.length
+        const allLabels = timeSeriesFull.map((p) => p.date)
+        const historicalData = timeSeriesFull.map((p, idx) =>
+          idx < originalLength ? p.value : null
+        )
+        const lastHistoricalValue = timeSeriesFull[originalLength - 1]?.value
+        const forecastData = timeSeriesFull.map((p, idx) => {
+          if (idx < originalLength - 1) return null
+          if (idx === originalLength - 1) return lastHistoricalValue
+          return p.value
+        })
+
+        newContents.push({
+          type: 'chart',
+          title: '',
+          data: {
+            labels: allLabels,
+            datasets: [
+              { label: '历史价格', data: historicalData, color: '#8b5cf6' },
+              { label: '预测价格', data: forecastData, color: '#06b6d4' }
+            ]
+          },
+          sessionId: backendSessionId,
+          messageId: backendMessageId,
+          originalData: timeSeriesOriginal
+        })
+      } else if (timeSeriesOriginal.length > 0) {
+        // 只有历史图表
+        newContents.push({
+          type: 'chart',
+          title: '',
+          data: {
+            labels: timeSeriesOriginal.map((p) => p.date),
+            datasets: [
+              { label: '历史价格', data: timeSeriesOriginal.map((p) => p.value), color: '#8b5cf6' }
+            ]
+          },
+          sessionId: backendSessionId,
+          messageId: backendMessageId,
+          originalData: timeSeriesOriginal
+        })
+      }
+
+      // 4. 报告/结论
+      if (conclusion) {
+        newContents.push({
+          type: 'text',
+          text: conclusion
+        })
+      }
+
+      return {
+        ...msg,
+        contents: newContents.length > 0 ? newContents : msg.contents
+      }
+    }))
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -843,7 +1079,17 @@ export function ChatArea({ sessionId: externalSessionId }: ChatAreaProps) {
 
       {/* 对话区域 */}
       <div ref={chatContainerRef} className="flex-1 overflow-y-auto p-6 space-y-6">
-        {isEmpty ? (
+        {isLoadingHistory ? (
+          /* 加载历史记录中 */
+          <div className="flex flex-col items-center justify-center h-full -mt-20">
+            <div className="flex items-center gap-3">
+              <div className="w-2 h-2 bg-violet-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+              <div className="w-2 h-2 bg-violet-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+              <div className="w-2 h-2 bg-violet-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+            </div>
+            <p className="text-gray-400 text-sm mt-4">加载对话历史...</p>
+          </div>
+        ) : isEmpty ? (
           /* 空状态 - 欢迎界面 */
           <div className="flex flex-col items-center justify-center h-full -mt-20">
             <div className="text-center max-w-md">

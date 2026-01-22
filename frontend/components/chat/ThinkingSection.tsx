@@ -14,11 +14,14 @@ interface ThinkingSectionProps {
 export function ThinkingSection({ content, isLoading = false, logs = [] }: ThinkingSectionProps) {
   const [isExpanded, setIsExpanded] = useState(false)
 
-  // 如果没有内容且不在加载中且没有日志，不显示
-  if (!content && !isLoading && logs.length === 0) return null
+  // 只保留意图识别日志
+  const intentLogs = logs.filter(log => log.step_id === 'intent')
 
-  // 计算总内容长度
-  const totalLength = content.length + logs.reduce((acc, log) => acc + log.content.length, 0)
+  // 如果没有内容且不在加载中且没有意图识别日志，不显示
+  if (!content && !isLoading && intentLogs.length === 0) return null
+
+  // 计算总内容长度（只计算意图识别相关内容）
+  const totalLength = content.length + intentLogs.reduce((acc, log) => acc + log.content.length, 0)
 
   return (
     <div className="glass rounded-xl border border-white/5 overflow-hidden">
@@ -76,15 +79,15 @@ export function ThinkingSection({ content, isLoading = false, logs = [] }: Think
               <div className="text-sm text-gray-400 leading-relaxed whitespace-pre-wrap bg-dark-700/30 rounded-lg p-3">
                 {content}
                 {/* 闪烁光标效果 - 仅在加载时显示 */}
-                {isLoading && logs.length === 0 && (
+                {isLoading && intentLogs.length === 0 && (
                   <span className="inline-block w-2 h-4 ml-0.5 bg-violet-400/70 animate-pulse" />
                 )}
               </div>
             </div>
           )}
 
-          {/* 累积的思考日志（各步骤 LLM 输出） */}
-          {logs.map((log, index) => (
+          {/* 仅当没有流式内容时，显示历史保存的意图识别日志 */}
+          {!content && intentLogs.map((log, index) => (
             <div key={`${log.step_id}-${index}`} className="mb-4 last:mb-0">
               <div className="text-xs font-medium text-violet-400 mb-1.5 flex items-center gap-1.5">
                 <span className="w-1.5 h-1.5 bg-violet-400 rounded-full" />
@@ -97,7 +100,7 @@ export function ThinkingSection({ content, isLoading = false, logs = [] }: Think
           ))}
 
           {/* 加载状态（没有任何内容时） */}
-          {!content && logs.length === 0 && isLoading && (
+          {!content && intentLogs.length === 0 && isLoading && (
             <div className="text-sm text-gray-500 italic flex items-center gap-2">
               <span>正在分析...</span>
               <span className="inline-block w-2 h-4 bg-violet-400/70 animate-pulse" />

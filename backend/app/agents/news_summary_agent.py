@@ -7,19 +7,15 @@
 
 import json
 from typing import Dict, Any, List, Tuple
-from openai import OpenAI
 
+from .base import BaseAgent
 from app.schemas.session_schema import NewsItem, SummarizedNewsItem
 
 
-class NewsSummaryAgent:
+class NewsSummaryAgent(BaseAgent):
     """新闻总结 Agent - 批量总结新闻标题和内容"""
 
-    def __init__(self, api_key: str):
-        self.client = OpenAI(
-            api_key=api_key,
-            base_url="https://api.deepseek.com"
-        )
+    DEFAULT_TEMPERATURE = 0.3
 
     def summarize(self, news_items: List[NewsItem]) -> Tuple[List[SummarizedNewsItem], str]:
         """
@@ -36,30 +32,24 @@ class NewsSummaryAgent:
         if not news_items:
             return [], ""
 
+        news_text = self._format_news_for_prompt(news_items)
+        prompt = self._build_prompt(news_text, len(news_items))
+
+        messages = self.build_messages(user_content=prompt)
+
+        content = self.call_llm(messages, fallback=None)
+
+        if content is None:
+            print(f"[{self.agent_name}] LLM 总结失败，使用原标题")
+            return self._fallback_result(news_items), ""
+
         try:
-            # 构建批量总结 prompt
-            news_text = self._format_news_for_prompt(news_items)
-            prompt = self._build_prompt(news_text, len(news_items))
-
-            response = self.client.chat.completions.create(
-                model="deepseek-chat",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.3,
-            )
-
-            # 解析 LLM 返回的 JSON
-            response_text = response.choices[0].message.content.strip()
-            parsed_response = self._parse_response(response_text)
-            summaries = json.loads(parsed_response)
-
-            # 构建结果
-            result = self._build_result(news_items, summaries)
-
-            print(f"[NewsSummaryAgent] LLM 批量总结完成: {len(result)} 条")
-            return result, response_text
-
+            parsed_response = self.parse_json(content)
+            result = self._build_result(news_items, parsed_response)
+            print(f"[{self.agent_name}] LLM 批量总结完成: {len(result)} 条")
+            return result, content
         except Exception as e:
-            print(f"[NewsSummaryAgent] LLM 总结失败，使用原标题: {e}")
+            print(f"[{self.agent_name}] JSON 解析失败: {e}")
             return self._fallback_result(news_items), ""
 
     def _format_news_for_prompt(self, news_items: List[NewsItem]) -> str:
@@ -93,16 +83,6 @@ class NewsSummaryAgent:
   ...
 ]"""
 
-    def _parse_response(self, response_text: str) -> str:
-        """解析 LLM 响应，处理 markdown 代码块"""
-        text = response_text
-        if text.startswith("```"):
-            text = text.split("```")[1]
-            if text.startswith("json"):
-                text = text[4:]
-            text = text.strip()
-        return text
-
     def _build_result(
         self,
         news_items: List[NewsItem],
@@ -111,10 +91,8 @@ class NewsSummaryAgent:
         """根据 LLM 总结构建结果列表"""
         result = []
         for i, item in enumerate(news_items):
-            # 找到对应的总结
             summary = next((s for s in summaries if s.get("index") == i + 1), None)
             if summary:
-                # 优先使用 LLM 识别的来源，降级到原始 source_name
                 source_name = summary.get("source_name") or item.source_name
                 result.append(SummarizedNewsItem(
                     summarized_title=summary.get("summarized_title", item.title[:50]),
@@ -126,7 +104,6 @@ class NewsSummaryAgent:
                     source_name=source_name
                 ))
             else:
-                # 降级：使用原标题
                 result.append(SummarizedNewsItem(
                     summarized_title=item.title[:50] if len(item.title) > 50 else item.title,
                     summarized_content=item.content[:100] if item.content else "",

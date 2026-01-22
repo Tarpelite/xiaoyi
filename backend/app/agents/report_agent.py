@@ -5,71 +5,99 @@ Report Agent 模块
 负责生成金融分析报告
 """
 
-import json
 from typing import Dict, Any, List, Optional
-from openai import OpenAI
+
+from .base import BaseAgent
 
 
-class ReportAgent:
+class ReportAgent(BaseAgent):
     """分析报告生成 Agent"""
 
-    def __init__(self, api_key: str):
-        """
-        初始化 Report Agent
-        """
-        self.client = OpenAI(
-            api_key=api_key,
-            base_url="https://api.deepseek.com"
-        )
+    DEFAULT_TEMPERATURE = 0.3
 
-    def generate(
+    SYSTEM_PROMPT = """你是资深的金融分析师。你的任务是生成自然段格式的分析报告，而非要点列表。
+
+**核心要求：**
+1. 使用自然段陈述，语气连贯流畅，避免使用"-"、"•"等列表符号
+2. 将要点式内容改写为连贯的自然段落
+3. 在关键数据、重要结论处使用 **加粗** 标记
+4. 保持专业严谨，基于数据和技术指标
+5. 逻辑清晰，层层递进
+6. 明确风险点，给出实用建议"""
+
+
+    def generate_streaming(
         self,
         user_question: str,
         features: Dict[str, Any],
         forecast_result: Dict[str, Any],
         sentiment_result: Optional[Dict[str, Any]] = None,
-        conversation_history: Optional[List[Dict[str, str]]] = None
-    ) -> Dict[str, str]:
+        conversation_history: Optional[List[Dict[str, str]]] = None,
+        on_chunk: Optional[callable] = None
+    ) -> str:
         """
-        生成分析报告内容
+        流式生成分析报告
+
+        Args:
+            user_question: 用户原始问题
+            features: 时序特征数据
+            forecast_result: 预测结果
+            sentiment_result: 情绪分析结果（可选）
+            conversation_history: 对话历史（可选）
+            on_chunk: 每个 chunk 的回调函数
 
         Returns:
-            Dict with 'content' (报告内容) and 'raw_response' (原始 LLM 输出)
+            完整报告内容
         """
-        # 提取预测数据
+        try:
+            prompt = self._build_prompt(user_question, features, forecast_result, sentiment_result)
+        except (ValueError, TypeError) as e:
+            prompt = f"数据分析请求: {user_question}\n数据详情: {str(features)}\n预测详情: {str(forecast_result)}"
+
+        messages = self.build_messages(
+            user_content=prompt,
+            system_prompt=self.SYSTEM_PROMPT,
+            conversation_history=conversation_history,
+            history_window=5
+        )
+
+        content = self.call_llm(messages, stream=True, on_chunk=on_chunk)
+        return content
+
+    def _build_prompt(
+        self,
+        user_question: str,
+        features: Dict[str, Any],
+        forecast_result: Dict[str, Any],
+        sentiment_result: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """构建报告生成 prompt"""
         forecast_summary = forecast_result.get("forecast", [])
         forecast_preview = forecast_summary[:7]
-        
-        # 1. 安全计算预测趋势（确保数值为 float）
-        try:
-            if len(forecast_summary) >= 7:
-                start_val = float(forecast_summary[0]["value"])
-                end_val_7d = float(forecast_summary[6]["value"])
-                end_val_total = float(forecast_summary[-1]["value"])
-                
-                short_term_change = end_val_7d - start_val
-                long_term_change = end_val_total - start_val
-                
-                st_pct = (short_term_change / start_val * 100) if start_val != 0 else 0
-                lt_pct = (long_term_change / start_val * 100) if start_val != 0 else 0
-            else:
-                short_term_change = long_term_change = st_pct = lt_pct = 0
-        except (ValueError, TypeError, KeyError):
-            short_term_change = long_term_change = st_pct = lt_pct = 0
-        
-        # 2. 构建情绪分析块（以自然段形式描述，而非要点）
-        # sentiment_result 可能是 dict 或对象
+
+        # 1. 计算预测趋势
+        short_term_change = long_term_change = st_pct = lt_pct = 0
+        if len(forecast_summary) >= 7:
+            start_val = float(forecast_summary[0]["value"])
+            end_val_7d = float(forecast_summary[6]["value"])
+            end_val_total = float(forecast_summary[-1]["value"])
+
+            short_term_change = end_val_7d - start_val
+            long_term_change = end_val_total - start_val
+
+            st_pct = (short_term_change / start_val * 100) if start_val != 0 else 0
+            lt_pct = (long_term_change / start_val * 100) if start_val != 0 else 0
+
+        # 2. 构建情绪分析块
         sentiment_section = ""
         if sentiment_result:
-            # 支持 dict 和对象两种格式
             if isinstance(sentiment_result, dict):
                 score = float(sentiment_result.get("score", 0))
                 description = sentiment_result.get("description", "")
             else:
                 score = float(sentiment_result.score)
                 description = sentiment_result.description
-            
-            # 根据分数判断情绪标签
+
             if score > 0.6:
                 sentiment_label = "极度看涨"
             elif score > 0.3:
@@ -80,29 +108,18 @@ class ReportAgent:
                 sentiment_label = "偏悲观"
             else:
                 sentiment_label = "极度看跌"
-            
+
             sentiment_section = f"""
 ## 市场情绪分析
 整体市场情绪为**{sentiment_label}**，情绪得分为{score:.2f}（范围-1到1）。{description}
 """
 
-        system_prompt = """你是资深的金融分析师。你的任务是生成自然段格式的分析报告，而非要点列表。
+        # 3. 构建主 Prompt
+        f_latest = float(features.get('latest', 0))
+        f_mean = float(features.get('mean', 1))
+        change_pct = (f_latest - f_mean) / f_mean * 100
 
-**核心要求：**
-1. 使用自然段陈述，语气连贯流畅，避免使用"-"、"•"等列表符号
-2. 将要点式内容改写为连贯的自然段落
-3. 在关键数据、重要结论处使用 **加粗** 标记
-4. 保持专业严谨，基于数据和技术指标
-5. 逻辑清晰，层层递进
-6. 明确风险点，给出实用建议"""
-
-        # 3. 构建 Prompt (对 features 中的数值进行 float 强制转换)
-        try:
-            f_latest = float(features.get('latest', 0))
-            f_mean = float(features.get('mean', 1)) # 避免除以0
-            change_pct = (f_latest - f_mean) / f_mean * 100
-            
-            prompt = f"""用户问题: {user_question}
+        prompt = f"""用户问题: {user_question}
 
 ## 数据特征分析
 数据时间范围为{features.get('date_range', '未知')}，共包含{features.get('data_points', 0)}个有效数据点。价格在{float(features.get('min', 0)):.2f}元至{float(features.get('max', 0)):.2f}元区间内波动，当前价位为**{f_latest:.2f}元**，略{'高于' if change_pct > 0 else '低于' if change_pct < 0 else '等于'}均值{f_mean:.2f}元（偏离幅度{abs(change_pct):.2f}%）。
@@ -153,30 +170,4 @@ class ReportAgent:
 - 关键数据和结论使用 **加粗** 标记
 - 避免使用"-"、"•"、"1."等列表符号
 """
-        except (ValueError, TypeError) as e:
-            # 如果转换依然失败，回退到无格式模式
-            prompt = f"数据分析请求: {user_question}\n数据详情: {str(features)}\n预测详情: {str(forecast_result)}"
-
-        # 4. 消息发送
-        messages = [{"role": "system", "content": system_prompt}]
-        if conversation_history:
-            messages.extend(conversation_history[-5:])
-        messages.append({"role": "user", "content": prompt})
-        
-        try:
-            response = self.client.chat.completions.create(
-                model="deepseek-chat",
-                messages=messages,
-                temperature=0.3,
-            )
-            raw_content = response.choices[0].message.content
-            return {
-                "content": raw_content,
-                "raw_response": raw_content  # 报告内容即原始输出
-            }
-        except Exception as e:
-            error_msg = f"生成报告时发生 API 错误: {str(e)}"
-            return {
-                "content": error_msg,
-                "raw_response": error_msg
-            }
+        return prompt

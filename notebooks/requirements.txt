@@ -1,5 +1,0 @@
-akshare>=1.18.0
-timecopilot>=0.0.22
-openai>=1.0.0
-pandas>=2.0.0
-matplotlib>=3.7.0

@@ -75,6 +75,25 @@ class ReportItem(BaseModel):
     source: RAGSource           # 来源信息
 
 
+# ========== 预测结果类型 ==========
+
+class ForecastMetrics(BaseModel):
+    """预测模型性能指标"""
+    mae: float                  # 平均绝对误差
+    rmse: Optional[float] = None  # 均方根误差（Prophet 可能不返回）
+
+
+class ForecastResult(BaseModel):
+    """
+    预测结果（统一返回格式）
+
+    所有 Forecaster 模型都返回此类型，消除中间转换
+    """
+    points: List[TimeSeriesPoint]  # 预测数据点（已标记 is_prediction=True）
+    metrics: ForecastMetrics       # 模型性能指标
+    model: str                     # 模型名称
+
+
 class StepDetail(BaseModel):
     """步骤详情"""
     id: str
@@ -203,6 +222,9 @@ class MessageData(BaseModel):
     # 思考日志 (累积显示所有 LLM 调用的原始输出)
     thinking_logs: List[ThinkingLogEntry] = Field(default_factory=list)
 
+    # 流式状态 (用于断点续传)
+    stream_status: str = Field(default="idle")  # idle | streaming | completed | error
+
 
 class SessionData(BaseModel):
     """
@@ -234,7 +256,6 @@ class CreateAnalysisRequest(BaseModel):
     message: str = Field(..., description="用户问题")
     session_id: str = Field(..., description="会话ID（必填，通过 POST /api/sessions 创建）")
     model: str = Field(default="prophet", description="预测模型")
-    force_intent: Optional[str] = Field(default=None, description="强制指定意图")
 
 
 class AnalysisStatusResponse(BaseModel):
