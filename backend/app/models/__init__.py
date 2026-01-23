@@ -11,6 +11,7 @@ from .prophet import ProphetForecaster
 from .xgboost import XGBoostForecaster
 from .randomforest import RandomForestForecaster
 from .dlinear import DLinearForecaster
+from .seasonal_naive import SeasonalNaiveForecaster
 
 __all__ = [
     "BaseForecaster",
@@ -19,4 +20,5 @@ __all__ = [
     "XGBoostForecaster",
     "RandomForestForecaster",
     "DLinearForecaster",
+    "SeasonalNaiveForecaster",
 ]

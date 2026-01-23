@@ -142,7 +142,8 @@ class UnifiedIntent(BaseModel):
     raw_domain_keywords: List[str] = Field(default_factory=list)
 
     # 预测参数 (仅 is_forecast=true 时使用)
-    forecast_model: str = Field(default="prophet")
+    forecast_model: Optional[str] = Field(default=None, description="预测模型名称，None 表示自动选择")
+    print(f"[UnifiedIntent] forecast_model: {forecast_model}")
     history_days: int = Field(default=365)
     forecast_horizon: int = Field(default=30)
 
@@ -219,6 +220,10 @@ class MessageData(BaseModel):
     conclusion: str = ""
     error_message: Optional[str] = None
 
+    # 模型选择
+    model_selection_reason: Optional[str] = Field(default=None, description="模型选择原因说明")
+    model_name: Optional[str] = Field(default=None, description="当前消息使用的预测模型名称")
+
     # 思考日志 (累积显示所有 LLM 调用的原始输出)
     thinking_logs: List[ThinkingLogEntry] = Field(default_factory=list)
 
@@ -255,7 +260,7 @@ class CreateAnalysisRequest(BaseModel):
     """创建分析任务请求"""
     message: str = Field(..., description="用户问题")
     session_id: str = Field(..., description="会话ID（必填，通过 POST /api/sessions 创建）")
-    model: str = Field(default="prophet", description="预测模型")
+    model: Optional[str] = Field(default=None, description="预测模型，None 表示自动选择")
 
 
 class AnalysisStatusResponse(BaseModel):

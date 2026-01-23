@@ -13,7 +13,7 @@
 
 export interface CreateAnalysisRequest {
   message: string
-  model: 'prophet' | 'xgboost' | 'randomforest' | 'dlinear'
+  model?: string | null  // 可选，null 表示自动选择
   context?: string
   session_id?: string  // 多轮对话时传入
 }
@@ -143,7 +143,7 @@ export async function createAnalysis(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       message,
-      model: options?.model || 'prophet',
+      model: options?.model ?? null,  // null 表示自动选择
       session_id: options?.sessionId || null
     })
   })
@@ -274,7 +274,7 @@ export interface StreamCallbacks {
 export async function streamAnalysisTask(
   message: string,
   callbacks: StreamCallbacks,
-  model: string = 'prophet',
+  model?: string | null,  // 可选，null 表示自动选择
   context: string = '',
   sessionId?: string | null
 ): Promise<{ session_id: string; message_id: string }> {
@@ -283,7 +283,7 @@ export async function streamAnalysisTask(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       message,
-      model,
+      model: model ?? null,  // null 表示自动选择
       context,
       session_id: sessionId || null
     })

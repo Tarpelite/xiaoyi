@@ -47,7 +47,7 @@ class SuggestionsRequest(BaseModel):
 router = APIRouter()
 
 
-async def run_background_analysis(session_id: str, message_id: str, user_input: str, model_name: str):
+async def run_background_analysis(session_id: str, message_id: str, user_input: str, model_name: Optional[str]):
     """后台运行分析任务（独立于 SSE 连接）"""
     streaming_processor = get_streaming_processor()
     await streaming_processor.execute_streaming(
@@ -102,7 +102,7 @@ async def create_analysis(
         session.session_id,
         message.message_id,
         request.message,
-        request.model or "prophet"
+        request.model  # None 表示自动选择
     )
 
     return {
@@ -363,8 +363,8 @@ async def backtest_prediction(request: "BacktestRequest"):
         "y": [p.value for p in train_points]
     })
 
-    # 运行预测
-    model_to_use = data.model_name if hasattr(data, 'model_name') and data.model_name else "prophet"
+    # 运行预测（从 MessageData 获取模型名称）
+    model_to_use = data.model_name if data.model_name else "prophet"
     forecast_result = await run_forecast(
         df,
         model_to_use,

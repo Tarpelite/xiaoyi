@@ -112,12 +112,14 @@ class IntentAgent(BaseAgent):
 ## 预测参数
 
 仅 is_forecast=true 时需要设置：
-- forecast_model: prophet(默认)/xgboost/randomforest/dlinear
+- forecast_model: 如果用户明确指定了模型（如"用XGBoost"、"用prophet模型"），则返回对应的模型名称（prophet/xgboost/randomforest/dlinear）；如果用户没有指定模型，则返回 null（表示自动选择最佳模型）
 - history_days: 历史数据天数 (默认365)
 - forecast_horizon: 预测天数 (默认30)
 
 根据用户描述调整：
-- "用XGBoost" → model="xgboost"
+- "用XGBoost" → forecast_model="xgboost"
+- "用prophet模型" → forecast_model="prophet"
+- 用户没有提到具体模型 → forecast_model=null
 - "预测三个月" → forecast_horizon=90
 - "看半年数据" → history_days=180
 
@@ -133,7 +135,7 @@ class IntentAgent(BaseAgent):
     "raw_search_keywords": ["关键词1", "关键词2"],
     "raw_rag_keywords": ["关键词1"],
     "raw_domain_keywords": ["关键词1"],
-    "forecast_model": "prophet",
+    "forecast_model": null,
     "history_days": 365,
     "forecast_horizon": 30,
     "reason": "判断理由",
@@ -164,7 +166,7 @@ class IntentAgent(BaseAgent):
 - enable_domain_info: 领域信息获取（股票新闻、行情）
 
 ## 预测参数（仅 is_forecast=true）
-- forecast_model: prophet/xgboost/randomforest/dlinear
+- forecast_model: 如果用户明确指定了模型（如"用XGBoost"、"用prophet模型"），则返回对应的模型名称（prophet/xgboost/randomforest/dlinear）；如果用户没有指定模型，则返回 null（表示自动选择最佳模型）
 - history_days: 历史数据天数
 - forecast_horizon: 预测天数
 
@@ -181,7 +183,7 @@ class IntentAgent(BaseAgent):
     "raw_search_keywords": ["关键词"],
     "raw_rag_keywords": ["关键词"],
     "raw_domain_keywords": ["关键词"],
-    "forecast_model": "prophet",
+    "forecast_model": null,
     "history_days": 365,
     "forecast_horizon": 30,
     "reason": "简短判断理由",
@@ -210,7 +212,7 @@ class IntentAgent(BaseAgent):
             raw_search_keywords=result.get("raw_search_keywords", []),
             raw_rag_keywords=result.get("raw_rag_keywords", []),
             raw_domain_keywords=result.get("raw_domain_keywords", []),
-            forecast_model=result.get("forecast_model", "prophet"),
+            forecast_model=result.get("forecast_model"),  # None 表示自动选择
             history_days=result.get("history_days", 365),
             forecast_horizon=result.get("forecast_horizon", 30),
             reason=result.get("reason", ""),

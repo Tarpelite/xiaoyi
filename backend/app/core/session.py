@@ -208,6 +208,45 @@ class Message:
             data.conclusion = conclusion
             self._save(data)
 
+    def save_model_selection(
+        self,
+        selected_model: str,
+        model_comparison: Dict[str, Optional[float]],
+        is_better_than_baseline: bool
+    ):
+        """保存模型选择信息"""
+        data = self.get()
+        if data:
+            # 将模型选择信息存储在 MessageData 中
+            # 由于 MessageData 可能没有专门的字段，我们通过 step_details 或思考日志保存
+            # 或者可以通过扩展 MessageData schema 来添加字段
+            # 目前先通过思考日志保存，以便后续可以查看
+            import json
+            selection_info = {
+                "selected_model": selected_model,
+                "model_comparison": model_comparison,
+                "is_better_than_baseline": is_better_than_baseline
+            }
+            self.append_thinking_log(
+                "model_selection",
+                "模型选择",
+                f"选择的模型: {selected_model}, 模型比较: {json.dumps(model_comparison, ensure_ascii=False)}, 优于baseline: {is_better_than_baseline}"
+            )
+
+    def save_model_selection_reason(self, reason: str):
+        """保存模型选择原因"""
+        data = self.get()
+        if data:
+            data.model_selection_reason = reason
+            self._save(data)
+
+    def save_model_name(self, model_name: str):
+        """保存模型名称"""
+        data = self.get()
+        if data:
+            data.model_name = model_name
+            self._save(data)
+
     # ========== 状态管理 ==========
 
     def mark_completed(self):

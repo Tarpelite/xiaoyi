@@ -12,8 +12,47 @@ from app.models import (
     ProphetForecaster,
     XGBoostForecaster,
     RandomForestForecaster,
-    DLinearForecaster
+    DLinearForecaster,
+    SeasonalNaiveForecaster
 )
+from app.schemas.session_schema import ForecastResult
+
+
+async def _run_single_model_forecast(
+    df: pd.DataFrame,
+    model_name: str,
+    horizon: int,
+    prophet_params: dict = None
+) -> ForecastResult:
+    """
+    运行单个预测模型（内部工具函数）
+
+    Args:
+        df: 输入数据 DataFrame
+        model_name: 模型名称 (prophet/xgboost/randomforest/dlinear/seasonal_naive)
+        horizon: 预测天数
+        prophet_params: Prophet 模型参数（可选）
+
+    Returns:
+        ForecastResult: 预测结果对象
+    """
+    if model_name == "prophet":
+        forecaster = ProphetForecaster()
+        return await asyncio.to_thread(
+            forecaster.forecast, df, horizon, prophet_params or {}
+        )
+    elif model_name == "xgboost":
+        forecaster = XGBoostForecaster()
+        return await asyncio.to_thread(forecaster.forecast, df, horizon)
+    elif model_name == "randomforest":
+        forecaster = RandomForestForecaster()
+        return await asyncio.to_thread(forecaster.forecast, df, horizon)
+    elif model_name == "seasonal_naive":
+        forecaster = SeasonalNaiveForecaster()
+        return await asyncio.to_thread(forecaster.forecast, df, horizon)
+    else:  # dlinear
+        forecaster = DLinearForecaster()
+        return await asyncio.to_thread(forecaster.forecast, df, horizon)
 
 
 async def run_forecast(
@@ -34,17 +73,4 @@ async def run_forecast(
     Returns:
         预测结果字典，包含 forecast 和 metrics
     """
-    if model == "prophet":
-        forecaster = ProphetForecaster()
-        return await asyncio.to_thread(
-            forecaster.forecast, df, horizon, prophet_params or {}
-        )
-    elif model == "xgboost":
-        forecaster = XGBoostForecaster()
-        return await asyncio.to_thread(forecaster.forecast, df, horizon)
-    elif model == "randomforest":
-        forecaster = RandomForestForecaster()
-        return await asyncio.to_thread(forecaster.forecast, df, horizon)
-    else:  # dlinear
-        forecaster = DLinearForecaster()
-        return await asyncio.to_thread(forecaster.forecast, df, horizon)
+    return await _run_single_model_forecast(df, model, horizon, prophet_params)

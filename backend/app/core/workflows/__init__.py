@@ -22,6 +22,7 @@ from .analysis import recommend_forecast_params
 
 # 预测
 from .forecast import run_forecast
+from .model_selection import select_best_model
 
 # 转换
 from .converters import df_to_points
@@ -41,6 +42,8 @@ __all__ = [
     "recommend_forecast_params",
     # forecast.py
     "run_forecast",
+    # model_selection.py
+    "select_best_model",
     # converters.py
     "df_to_points",
 ]
