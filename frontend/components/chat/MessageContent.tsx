@@ -1,19 +1,22 @@
 'use client'
 
 import { useState, useMemo, useRef, useCallback, useEffect } from 'react'
+import { motion, AnimatePresence } from 'framer-motion'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { LineChart, Line, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, ReferenceLine } from 'recharts'
+import { LineChart, Line, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, ReferenceLine, ReferenceArea } from 'recharts'
 import { RotateCcw, Move } from 'lucide-react'
-import type { TextContent, ChartContent, TableContent } from './ChatArea'
+import type { TextContent, ChartContent, TableContent, StockContent } from './ChatArea'
 import { useBacktestSimulation } from '@/hooks/useBacktestSimulation'
 import { BacktestControls } from './BacktestControls'
 import type { TimeSeriesPoint } from '@/lib/api/analysis'
 import rehypeRaw from 'rehype-raw'
+import { StockWidget } from '@/components/stock/StockWidget'
+import { ChartNewsSidebar } from './ChartNewsSidebar'
 
 
 interface MessageContentProps {
-  content: TextContent | ChartContent | TableContent
+  content: TextContent | ChartContent | TableContent | StockContent
 }
 
 // 预处理 markdown 文本，确保带正负号的数字加粗能正确解析
@@ -39,7 +42,7 @@ export function MessageContent({ content }: MessageContentProps) {
   if (content.type === 'text') {
     // 预处理文本，确保加粗格式正确
     const processedText = preprocessMarkdown(content.text)
-    
+
     return (
       <div className="prose prose-invert max-w-none">
         <ReactMarkdown
@@ -260,12 +263,53 @@ export function MessageContent({ content }: MessageContentProps) {
     )
   }
 
+  if (content.type === 'stock') {
+    return <StockWidget ticker={content.ticker} title={content.title} />;
+  }
+
   return null
 }
 
-// 交互式图表组件，支持鼠标拖拽平移和滚轮缩放
+// 交互式图表组件，支持鼠标拖拽平移、滚轮缩放、异常区高亮、新闻侧边栏
 function InteractiveChart({ content }: { content: ChartContent }) {
-  const { title, data, chartType = 'line', sessionId, messageId, originalData } = content
+  const { title, data, chartType = 'line', sessionId, messageId, originalData, anomalyZones = [], ticker } = content
+
+  // 新闻侧边栏状态
+  const [newsSidebarOpen, setNewsSidebarOpen] = useState(false)
+  const [selectedDate, setSelectedDate] = useState<string | null>(null)
+  const [newsData, setNewsData] = useState<any[]>([])
+  const [newsLoading, setNewsLoading] = useState(false)
+
+  // 异常区悬浮状态
+  const [activeZone, setActiveZone] = useState<any>(null)
+
+  // 获取新闻数据
+  useEffect(() => {
+    const fetchNews = async () => {
+      if (!newsSidebarOpen || !selectedDate || !ticker) return;
+      setNewsLoading(true);
+      try {
+        const response = await fetch(`/api/news?ticker=${ticker}&date=${selectedDate}&range=2`);
+        if (!response.ok) throw new Error('Failed to fetch news');
+        const data = await response.json();
+        setNewsData(data.news || []);
+      } catch (error) {
+        console.error('Failed to load news:', error);
+        setNewsData([]);
+      } finally {
+        setNewsLoading(false);
+      }
+    };
+    fetchNews();
+  }, [newsSidebarOpen, selectedDate, ticker]);
+
+  // 图表点击处理
+  const handleChartClick = useCallback((e: any) => {
+    if (e && e.activeLabel && ticker) {
+      setSelectedDate(e.activeLabel as string);
+      setNewsSidebarOpen(true);
+    }
+  }, [ticker]);
 
   // 回测功能hook
   const backtest = useBacktestSimulation({
@@ -382,7 +426,7 @@ function InteractiveChart({ content }: { content: ChartContent }) {
   const chartContainerRef = useRef<HTMLDivElement>(null)
   const [mouseY, setMouseY] = useState<number | null>(null) // 鼠标相对于绘图区域的Y坐标（像素）
   const [plotAreaBounds, setPlotAreaBounds] = useState<{ top: number; height: number } | null>(null) // 绘图区域边界
-  
+
   // 滑块拖拽状态
   const [isDraggingSlider, setIsDraggingSlider] = useState(false)
   const [tempSplitDate, setTempSplitDate] = useState<string | null>(null) // 拖拽时的临时分割日期
@@ -391,6 +435,25 @@ function InteractiveChart({ content }: { content: ChartContent }) {
   const displayData = useMemo(() => {
     return chartData.slice(viewStartIndex, viewEndIndex + 1)
   }, [chartData, viewStartIndex, viewEndIndex])
+
+  // DIAGNOSTIC: Check if zone dates exist in chartData AND their positions
+  useEffect(() => {
+    if (anomalyZones && anomalyZones.length > 0 && chartData.length > 0) {
+      const chartDates = new Set(chartData.map(d => d.name))
+      console.log('[DIAGNOSTIC] chartData range:', chartData[0]?.name, 'to', chartData[chartData.length - 1]?.name, `(${chartData.length} points)`)
+      console.log('[DIAGNOSTIC] viewStartIndex:', viewStartIndex, 'viewEndIndex:', viewEndIndex, 'visible:', viewEndIndex - viewStartIndex + 1, 'points')
+
+      anomalyZones.forEach((zone, idx) => {
+        const startIndex = chartData.findIndex(d => d.name === zone.startDate)
+        const endIndex = chartData.findIndex(d => d.name === zone.endDate)
+        const isInViewport = startIndex >= viewStartIndex && endIndex <= viewEndIndex
+        const hasStart = chartDates.has(zone.startDate)
+        const hasEnd = chartDates.has(zone.endDate)
+
+        console.log(`[DIAGNOSTIC] Zone ${idx} (${zone.startDate}-${zone.endDate}): start=${hasStart}(idx=${startIndex}), end=${hasEnd}(idx=${endIndex}), inViewport=${isInViewport}`)
+      })
+    }
+  }, [anomalyZones, chartData, viewStartIndex, viewEndIndex])
 
   // 检查是否处于缩放状态
   const isZoomed = (viewEndIndex - viewStartIndex + 1) < chartData.length
@@ -443,7 +506,7 @@ function InteractiveChart({ content }: { content: ChartContent }) {
       // 拖拽时绑定到 window，确保鼠标移出容器外也能继续拖拽
       window.addEventListener('mousemove', handleMouseMove)
       window.addEventListener('mouseup', handleMouseUp)
-      
+
       return () => {
         window.removeEventListener('mousemove', handleMouseMove)
         window.removeEventListener('mouseup', handleMouseUp)
@@ -529,18 +592,18 @@ function InteractiveChart({ content }: { content: ChartContent }) {
 
       const containerRect = container.getBoundingClientRect()
       const svgRect = svg.getBoundingClientRect()
-      
+
       // 查找 X 轴和 Y 轴的实际位置来确定绘图区域
       const xAxis = svg.querySelector('.recharts-cartesian-axis.xAxis')
       const yAxis = svg.querySelector('.recharts-cartesian-axis.yAxis')
-      
+
       // 如果找不到坐标轴，使用 margin 计算
       if (!xAxis || !yAxis) {
         const marginTop = 5
         const marginBottom = 20
         const legend = svg.querySelector('.recharts-legend-wrapper')
         const legendHeight = legend ? legend.getBoundingClientRect().height : 0
-        
+
         const plotTop = marginTop
         const plotHeight = containerRect.height - marginTop - marginBottom - legendHeight
         setPlotAreaBounds({ top: plotTop, height: plotHeight })
@@ -550,13 +613,13 @@ function InteractiveChart({ content }: { content: ChartContent }) {
       // 获取坐标轴的实际位置
       const xAxisRect = xAxis.getBoundingClientRect()
       const yAxisRect = yAxis.getBoundingClientRect()
-      
+
       // 绘图区域从 Y 轴顶部开始，到 X 轴顶部结束
       // 计算相对于容器顶部的偏移
       const plotTop = yAxisRect.top - containerRect.top
       const plotBottom = xAxisRect.top - containerRect.top
       const plotHeight = plotBottom - plotTop
-      
+
       if (plotHeight > 0) {
         setPlotAreaBounds({ top: plotTop, height: plotHeight })
       }
@@ -564,10 +627,10 @@ function InteractiveChart({ content }: { content: ChartContent }) {
 
     // 初始化时获取边界
     const timer = setTimeout(updatePlotAreaBounds, 100)
-    
+
     // 监听窗口大小变化
     window.addEventListener('resize', updatePlotAreaBounds)
-    
+
     // 使用 MutationObserver 监听 DOM 变化（图表渲染完成）
     const observer = new MutationObserver(updatePlotAreaBounds)
     observer.observe(container, { childList: true, subtree: true })
@@ -587,11 +650,11 @@ function InteractiveChart({ content }: { content: ChartContent }) {
     const handleMouseMove = (e: MouseEvent) => {
       const containerRect = container.getBoundingClientRect()
       const mouseYRelativeToContainer = e.clientY - containerRect.top
-      
+
       // 检查鼠标是否在绘图区域内
       const plotAreaTop = plotAreaBounds.top
       const plotAreaBottom = plotAreaTop + plotAreaBounds.height
-      
+
       if (mouseYRelativeToContainer >= plotAreaTop && mouseYRelativeToContainer <= plotAreaBottom) {
         // 计算相对于绘图区域顶部的坐标
         const yInPlotArea = mouseYRelativeToContainer - plotAreaTop
@@ -661,6 +724,12 @@ function InteractiveChart({ content }: { content: ChartContent }) {
           )}
         </div>
       </div>
+      {/* Zone计数器 - debug */}
+      {anomalyZones && anomalyZones.length > 0 && (
+        <div className="absolute top-2 right-2 bg-black/70 px-2 py-1 rounded text-xs text-white/70 z-10">
+          {anomalyZones.length} 个重点区域
+        </div>
+      )}
       <div
         ref={chartContainerRef}
         className="w-full h-64 relative"
@@ -674,6 +743,7 @@ function InteractiveChart({ content }: { content: ChartContent }) {
           <LineChart
             data={displayData}
             margin={{ top: 5, right: 10, left: 0, bottom: 20 }}
+            onClick={handleChartClick}
           >
             <CartesianGrid strokeDasharray="3 3" stroke="#3a3a4a" />
             <XAxis
@@ -721,11 +791,51 @@ function InteractiveChart({ content }: { content: ChartContent }) {
             <Legend
               wrapperStyle={{ fontSize: '12px' }}
             />
+            {/* 异常区域与悬浮提示 - Bloomberg风格 */}
+            {anomalyZones && anomalyZones.map((zone: any, idx: number) => {
+              // A股配色：红涨绿跌
+              const isPositive = (zone.avg_return || 0) >= 0
+              const zoneColor = isPositive
+                ? { fill: 'rgba(239, 68, 68, 0.04)', stroke: '#ef4444' }  // 红色=上涨
+                : { fill: 'rgba(34, 197, 94, 0.04)', stroke: '#22c55e' }   // 绿色=下跌
+
+              const impact = zone.impact || 0.5
+              const isCalm = zone.zone_type === 'calm'
+
+              // 使用唯一key：startDate-endDate组合
+              const uniqueKey = `zone-${zone.startDate}-${zone.endDate}-${idx}`
+
+              // FIX: 单日zones需要扩展宽度，否则ReferenceArea不显示
+              // 扩展到前一天（昨天），更符合视觉逻辑
+              let displayStartDate = zone.startDate
+              if (zone.startDate === zone.endDate) {
+                const startIdx = chartData.findIndex(d => d.name === zone.startDate)
+                if (startIdx > 0) {  // 确保不是第一个点
+                  displayStartDate = chartData[startIdx - 1].name  // 使用昨天的日期
+                }
+              }
+
+              return (
+                <ReferenceArea
+                  key={uniqueKey}
+                  x1={displayStartDate}
+                  x2={zone.endDate}
+                  fill={zoneColor.fill}
+                  fillOpacity={activeZone === zone ? impact * 1.5 : impact * 0.8}
+                  stroke={zoneColor.stroke}
+                  strokeOpacity={impact}
+                  strokeDasharray={isCalm ? '5 5' : undefined}
+                  onMouseEnter={() => setActiveZone(zone)}
+                  onMouseLeave={() => setActiveZone(null)}
+                  className="cursor-pointer transition-all duration-300"
+                />
+              )
+            })}
             {/* 鼠标跟随的水平参考线 */}
             {mouseY !== null && plotAreaBounds && (() => {
               // mouseY 已经是相对于绘图区域顶部的坐标
               const effectiveHeight = plotAreaBounds.height
-              
+
               // 计算对应的数据值
               const dataValue = yAxisDomain[1] - (mouseY / effectiveHeight) * (yAxisDomain[1] - yAxisDomain[0])
 
@@ -749,7 +859,7 @@ function InteractiveChart({ content }: { content: ChartContent }) {
               // 拖拽时使用临时日期，否则使用回测分割日期
               const splitDate = (isDraggingSlider && tempSplitDate) ? tempSplitDate : backtest.splitDate
               if (!splitDate) return null
-              
+
               // 检查分割日期是否在当前显示的数据中
               const splitDataPoint = displayData.find(item => item.name === splitDate)
               if (splitDataPoint) {
@@ -820,13 +930,13 @@ function InteractiveChart({ content }: { content: ChartContent }) {
             )}
           </LineChart>
         </ResponsiveContainer>
-        
+
         {/* X 轴滑块 - 明显的滑块圆点 */}
         {((hasBacktestSupport && originalData && originalData.length > 60) || (data.datasets.some(d => d.label === '历史价格') && data.datasets.some(d => d.label === '预测价格'))) && plotAreaBounds && (() => {
           // 计算分割点：拖拽时使用临时日期，否则使用回测分割点或历史价格和预测价格的分界点
           let splitDate = isDraggingSlider && tempSplitDate ? tempSplitDate : backtest.splitDate
           let splitIndexInChart = -1
-          
+
           if (splitDate) {
             // 回测模式：使用指定的分割点
             splitIndexInChart = chartData.findIndex(item => item.name === splitDate)
@@ -856,17 +966,17 @@ function InteractiveChart({ content }: { content: ChartContent }) {
               }
             }
           }
-          
+
           if (!splitDate || splitIndexInChart < 0) return null
-          
+
           // 检查是否在当前显示范围内
           const isInView = splitIndexInChart >= viewStartIndex && splitIndexInChart <= viewEndIndex
-          
+
           // 计算位置比例（相对于当前显示的 displayData）
           // 需要找到分割日期在 displayData 中的索引，而不是在 chartData 中的索引
           let positionRatio = 0
           const splitIndexInDisplayData = displayData.findIndex(item => item.name === splitDate)
-          
+
           if (splitIndexInDisplayData >= 0) {
             // 在显示数据中找到，计算位置比例
             const displayDataLength = displayData.length
@@ -888,14 +998,14 @@ function InteractiveChart({ content }: { content: ChartContent }) {
             // 不在显示数据中且不在拖拽，不显示
             return null
           }
-          
+
           // X 轴位置
           // plotAreaBounds.top + plotAreaBounds.height 是绘图区域的底部，也就是 X 轴线的位置
           // 滑块圆点应该直接显示在 X 轴线上
           const xAxisLineTop = plotAreaBounds.top + plotAreaBounds.height
           // 滑块圆点在 X 轴线上，所以顶部位置是 X 轴线位置减去圆点半径（8px）以居中
           const sliderTop = xAxisLineTop - 8
-          
+
           return (
             <>
               {/* 滑块圆点容器 - 覆盖绘图区域 */}
@@ -922,27 +1032,27 @@ function InteractiveChart({ content }: { content: ChartContent }) {
                     e.preventDefault()
                     const container = chartContainerRef.current
                     if (!container) return
-                    
+
                     // 开始拖拽
                     setIsDraggingSlider(true)
-                    
+
                     const updateSplitPoint = (clientX: number, isFinal: boolean = false) => {
                       const svg = container.querySelector('svg')
                       if (!svg) return
-                      
+
                       const svgRect = svg.getBoundingClientRect()
                       const plotLeft = svgRect.left
                       const plotWidth = svgRect.width
-                      
+
                       // 计算鼠标在绘图区域内的位置比例
                       const mouseX = clientX - plotLeft
                       const positionRatio = Math.max(0, Math.min(1, mouseX / plotWidth))
-                      
+
                       // 计算对应的数据点索引
                       const viewRange = viewEndIndex - viewStartIndex + 1
                       const relativeIndex = Math.round(positionRatio * viewRange)
                       const targetIndex = viewStartIndex + relativeIndex
-                      
+
                       // 找到对应的日期
                       if (targetIndex >= 0 && targetIndex < chartData.length && originalData) {
                         const targetDate = chartData[targetIndex].name
@@ -962,38 +1072,38 @@ function InteractiveChart({ content }: { content: ChartContent }) {
                         }
                       }
                     }
-                    
+
                     const handleMouseMove = (e: MouseEvent) => {
                       updateSplitPoint(e.clientX, false) // 拖拽中，不触发回测
                     }
-                    
+
                     const handleMouseUp = (e: MouseEvent) => {
                       updateSplitPoint(e.clientX, true) // 释放时，触发回测
                       window.removeEventListener('mousemove', handleMouseMove)
                       window.removeEventListener('mouseup', handleMouseUp)
                     }
-                    
+
                     // 立即更新一次（拖拽开始）
                     updateSplitPoint(e.clientX, false)
-                    
+
                     // 绑定全局事件以支持拖拽
                     window.addEventListener('mousemove', handleMouseMove)
                     window.addEventListener('mouseup', handleMouseUp)
                   }}
                 >
-                {/* 滑块圆点 - 大而明显 */}
-                <div className="w-full h-full bg-orange-400 rounded-full shadow-xl shadow-orange-400/50 border-2 border-orange-300 cursor-grab active:cursor-grabbing hover:scale-125 hover:shadow-orange-400/70 transition-all duration-200 flex items-center justify-center">
-                  {/* 内部白点 */}
-                  <div className="w-2 h-2 bg-white/90 rounded-full" />
-                </div>
-                
-                {/* 日期标签 - 悬停时显示 */}
-                <div className="absolute top-full left-1/2 transform -translate-x-1/2 mt-2 px-2 py-1 text-xs text-orange-300 bg-dark-800/95 backdrop-blur-sm rounded-md border border-orange-400/40 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none shadow-lg">
-                  {splitDate}
-                </div>
+                  {/* 滑块圆点 - 大而明显 */}
+                  <div className="w-full h-full bg-orange-400 rounded-full shadow-xl shadow-orange-400/50 border-2 border-orange-300 cursor-grab active:cursor-grabbing hover:scale-125 hover:shadow-orange-400/70 transition-all duration-200 flex items-center justify-center">
+                    {/* 内部白点 */}
+                    <div className="w-2 h-2 bg-white/90 rounded-full" />
+                  </div>
+
+                  {/* 日期标签 - 悬停时显示 */}
+                  <div className="absolute top-full left-1/2 transform -translate-x-1/2 mt-2 px-2 py-1 text-xs text-orange-300 bg-dark-800/95 backdrop-blur-sm rounded-md border border-orange-400/40 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none shadow-lg">
+                    {splitDate}
+                  </div>
                 </div>
               </div>
-              
+
               {/* 滑块交互区域 - 覆盖 X 轴区域，支持拖拽 */}
               <div
                 className="absolute cursor-pointer z-20"
@@ -1007,27 +1117,27 @@ function InteractiveChart({ content }: { content: ChartContent }) {
                   e.stopPropagation()
                   const container = chartContainerRef.current
                   if (!container) return
-                  
+
                   // 开始拖拽
                   setIsDraggingSlider(true)
-                  
+
                   const updateSplitPoint = (clientX: number, isFinal: boolean = false) => {
                     const svg = container.querySelector('svg')
                     if (!svg) return
-                    
+
                     const svgRect = svg.getBoundingClientRect()
                     const plotLeft = svgRect.left
                     const plotWidth = svgRect.width
-                    
+
                     // 计算鼠标在绘图区域内的位置比例
                     const mouseX = clientX - plotLeft
                     const positionRatio = Math.max(0, Math.min(1, mouseX / plotWidth))
-                    
+
                     // 计算对应的数据点索引
                     const viewRange = viewEndIndex - viewStartIndex + 1
                     const relativeIndex = Math.round(positionRatio * viewRange)
                     const targetIndex = viewStartIndex + relativeIndex
-                    
+
                     // 找到对应的日期
                     if (targetIndex >= 0 && targetIndex < chartData.length && originalData) {
                       const targetDate = chartData[targetIndex].name
@@ -1047,20 +1157,20 @@ function InteractiveChart({ content }: { content: ChartContent }) {
                       }
                     }
                   }
-                  
+
                   const handleMouseMove = (e: MouseEvent) => {
                     updateSplitPoint(e.clientX, false) // 拖拽中，不触发回测
                   }
-                  
+
                   const handleMouseUp = (e: MouseEvent) => {
                     updateSplitPoint(e.clientX, true) // 释放时，触发回测
                     window.removeEventListener('mousemove', handleMouseMove)
                     window.removeEventListener('mouseup', handleMouseUp)
                   }
-                  
+
                   // 立即更新一次（拖拽开始）
                   updateSplitPoint(e.clientX, false)
-                  
+
                   // 绑定全局事件以支持拖拽
                   window.addEventListener('mousemove', handleMouseMove)
                   window.addEventListener('mouseup', handleMouseUp)
@@ -1079,6 +1189,76 @@ function InteractiveChart({ content }: { content: ChartContent }) {
           当前视图：{chartData[viewStartIndex]?.name} 至 {chartData[viewEndIndex]?.name}
           ({viewEndIndex - viewStartIndex + 1} / {chartData.length} 个数据点)
         </div>
+      )}
+
+      {/* 异常区悬浮卡片 */}
+      <AnimatePresence>
+        {/* Event Capsule - Bloomberg风格事件摘要 */}
+        {activeZone && activeZone.event_summary && (
+          <div className="absolute top-16 left-1/2 -translate-x-1/2 z-50
+                        bg-[#020203] border border-white/10 
+                        px-4 py-2.5 rounded-lg shadow-2xl max-w-lg
+                        animate-in fade-in-0 slide-in-from-top-2 duration-200">
+            <div className="flex items-center gap-3">
+              {/* 高影响力标记 */}
+              {(activeZone.impact || 0) > 0.7 && (
+                <span className="text-lg animate-pulse">✨</span>
+              )}
+
+              {/* 事件摘要 */}
+              <span className="text-sm text-white/90 font-sans flex-1">
+                {activeZone.event_summary}
+              </span>
+
+              {/* 涨跌幅badge - A股红涨绿跌 */}
+              <span className={`text-xs px-2.5 py-1 rounded font-mono whitespace-nowrap font-semibold ${(activeZone.avg_return || 0) >= 0
+                ? 'bg-red-500/20 text-red-400 border border-red-500/30'  // 红涨
+                : 'bg-green-500/20 text-green-400 border border-green-500/30'  // 绿跌
+                }`}>
+                {((activeZone.avg_return || 0) >= 0 ? '+' : '')}
+                {((activeZone.avg_return || 0) * 100).toFixed(1)}%
+              </span>
+            </div>
+
+            {/* 日期范围小字 */}
+            <div className="mt-1.5 text-xs text-white/40 font-mono">
+              {activeZone.startDate} ~ {activeZone.endDate}
+            </div>
+          </div>
+        )}
+
+        {/* 原有的简单悬浮提示（作为fallback） */}
+        {activeZone && !activeZone.event_summary && (
+          <motion.div
+            initial={{ opacity: 0, y: 10, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 10, scale: 0.95 }}
+            transition={{ duration: 0.2 }}
+            className="absolute top-4 left-1/2 transform -translate-x-1/2 z-50"
+          >
+            <div className="glass rounded-xl p-3 shadow-2xl max-w-md border border-white/10">
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <div className={`w-2 h-2 rounded-full ${activeZone.sentiment === 'positive' ? 'bg-green-500' : activeZone.sentiment === 'negative' ? 'bg-red-500' : 'bg-violet-500'}`} />
+                  <span className="text-gray-400 text-xs">{activeZone.startDate} - {activeZone.endDate}</span>
+                </div>
+              </div>
+              <p className="text-gray-200 text-sm leading-relaxed">{activeZone.summary}</p>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* 新闻侧边栏 */}
+      {ticker && (
+        <ChartNewsSidebar
+          isOpen={newsSidebarOpen}
+          onClose={() => setNewsSidebarOpen(false)}
+          news={newsData}
+          loading={newsLoading}
+          selectedDate={selectedDate}
+          ticker={ticker}
+        />
       )}
     </div>
   )

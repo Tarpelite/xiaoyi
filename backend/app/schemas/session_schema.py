@@ -215,6 +215,10 @@ class MessageData(BaseModel):
     emotion: Optional[float] = None  # -1 到 1
     emotion_des: Optional[str] = None
 
+    # 异常区域（用于图表标注）
+    anomaly_zones: List[Dict] = Field(default_factory=list)  # 存储 [{startDate, endDate, summary, sentiment}, ...]
+    anomaly_zones_ticker: Optional[str] = None  # 对应的股票代码
+
     # 结论
     conclusion: str = ""
     error_message: Optional[str] = None

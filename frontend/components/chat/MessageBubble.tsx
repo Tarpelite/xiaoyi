@@ -486,7 +486,7 @@ export function MessageBubble({ message, onRegenerateMessage }: MessageBubblePro
                 try {
                   await navigator.clipboard.writeText(textToCopy)
                   // TODO: 可以添加toast提示
-                  console.log('已复制到剪贴板')
+                  // console.log('已复制到剪贴板')
                 } catch (err) {
                   console.error('复制失败:', err)
                 }

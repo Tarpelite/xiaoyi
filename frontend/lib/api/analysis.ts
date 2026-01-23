@@ -109,6 +109,15 @@ export interface MessageData {
   emotion: number | null
   emotion_des: string | null
 
+  // 异常区域（关键转折点标注）
+  anomaly_zones: Array<{
+    startDate: string
+    endDate: string
+    summary: string
+    sentiment: 'positive' | 'negative'
+  }>
+  anomaly_zones_ticker: string | null
+
   conclusion: string
 
   // 思考日志 (累积显示所有 LLM 调用的原始输出)
@@ -234,7 +243,7 @@ export interface FullStreamEvent {
   step?: number
   step_name?: string
   content?: string
-  data_type?: 'time_series_original' | 'time_series_full' | 'news' | 'emotion'
+  data_type?: 'time_series_original' | 'time_series_full' | 'news' | 'emotion' | 'anomaly_zones'
   data?: unknown
   prediction_start_day?: string
   intent?: string
@@ -459,6 +468,7 @@ export async function resumeStream(
         if (line.startsWith('data: ')) {
           try {
             const event: FullStreamEvent = JSON.parse(line.slice(6))
+            // console.log('[SSE] Raw event:', event.type, event.data_type, event)
 
             switch (event.type) {
               case 'resume':
@@ -480,6 +490,7 @@ export async function resumeStream(
                 break
 
               case 'data':
+                // console.log('[SSE] Data event - type:', event.data_type, 'data:', event.data)
                 callbacks.onData?.(
                   event.data_type || '',
                   event.data,

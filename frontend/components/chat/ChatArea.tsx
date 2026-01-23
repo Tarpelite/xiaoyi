@@ -21,7 +21,7 @@ export interface Step {
 }
 
 // 消息内容类型
-export type MessageContentType = 'text' | 'chart' | 'table'
+export type MessageContentType = 'text' | 'chart' | 'table' | 'stock'
 
 // 文本内容
 export interface TextContent {
@@ -46,6 +46,14 @@ export interface ChartContent {
   sessionId?: string
   messageId?: string
   originalData?: Array<{ date: string; value: number; is_prediction: boolean }>
+  // 异常区域和新闻（新增）
+  anomalyZones?: Array<{
+    startDate: string
+    endDate: string
+    summary: string
+    sentiment: 'positive' | 'negative' | 'neutral'
+  }>
+  ticker?: string  // 股票代码，用于获取新闻
 }
 
 // 表格内容
@@ -54,6 +62,13 @@ export interface TableContent {
   title?: string
   headers: string[]
   rows: (string | number)[][]
+}
+
+// 股票内容
+export interface StockContent {
+  type: 'stock'
+  ticker: string
+  title?: string
 }
 
 // 意图识别结果
@@ -71,8 +86,8 @@ export interface Message {
   role: 'user' | 'assistant'
   timestamp: string
   // 内容（支持多种类型，可以是单个或多个）
-  content?: TextContent | ChartContent | TableContent
-  contents?: (TextContent | ChartContent | TableContent)[]
+  content?: TextContent | ChartContent | TableContent | StockContent
+  contents?: (TextContent | ChartContent | TableContent | StockContent)[]
   // 旧版兼容：纯文本内容
   text?: string
   // 步骤进度（仅assistant消息）
@@ -241,11 +256,14 @@ export function ChatArea({ sessionId: externalSessionId, onSessionCreated }: Cha
     let accumulatedTimeSeriesFull: TimeSeriesPoint[] = []
     let accumulatedNews: NewsItem[] = []
     let accumulatedEmotion: { score: number; description: string } | null = null
+    let accumulatedAnomalyZones: any[] = []  // 异常区域
+    let stockTicker = ''  // 股票代码
     let predictionStartDay = ''
 
     return {
       // 恢复数据（断点续传时使用）
       onResume: (currentData: MessageData) => {
+        console.log('[ChatArea] Resume - currentData:', currentData)
         if (currentData) {
           if (currentData.time_series_original) {
             accumulatedTimeSeriesOriginal = currentData.time_series_original
@@ -255,11 +273,32 @@ export function ChatArea({ sessionId: externalSessionId, onSessionCreated }: Cha
           }
           if (currentData.news_list) {
             accumulatedNews = currentData.news_list
+            console.log('[ChatArea] Resume - Loaded news:', accumulatedNews.length, 'items')
+            console.log('[ChatArea] Resume - First news:', accumulatedNews[0]?.summarized_title || 'N/A')
+          } else {
+            console.log('[ChatArea] Resume - NO news_list in currentData')
           }
           if (currentData.emotion !== null && currentData.emotion !== undefined) {
             accumulatedEmotion = { score: currentData.emotion, description: currentData.emotion_des || '中性' }
           }
+          // 提取anomaly_zones
+          if (currentData.anomaly_zones && currentData.anomaly_zones.length > 0) {
+            accumulatedAnomalyZones = currentData.anomaly_zones
+            stockTicker = currentData.anomaly_zones_ticker || ''
+            console.log('[ChatArea] Resume - extracted anomaly zones:', accumulatedAnomalyZones.length, 'zones for ticker:', stockTicker)
+          } else {
+            console.log('[ChatArea] Resume - NO anomaly_zones in currentData')
+          }
           predictionStartDay = currentData.prediction_start_day || ''
+
+          console.log('[ChatArea] Resume - Data Summary:')
+          console.log('  - timeSeriesOriginal:', accumulatedTimeSeriesOriginal?.length || 0, 'points')
+          console.log('  - timeSeriesFull:', accumulatedTimeSeriesFull?.length || 0, 'points')
+          console.log('  - zones:', accumulatedAnomalyZones?.length || 0)
+          console.log('  - ticker:', stockTicker || 'EMPTY')
+          console.log('  - news:', accumulatedNews?.length || 0)
+          console.log('  - emotion:', accumulatedEmotion ? 'YES' : 'NO')
+
           updateContentsFromStreamData(
             assistantMessageId,
             accumulatedTimeSeriesOriginal,
@@ -269,7 +308,9 @@ export function ChatArea({ sessionId: externalSessionId, onSessionCreated }: Cha
             currentData.conclusion || null,
             predictionStartDay,
             backendSessionId,
-            backendMessageId
+            backendMessageId,
+            accumulatedAnomalyZones,
+            stockTicker
           )
         }
       },
@@ -294,7 +335,12 @@ export function ChatArea({ sessionId: externalSessionId, onSessionCreated }: Cha
       },
 
       // 步骤完成
-      onStepComplete: (step: number) => {
+      onStepComplete: (step: number, data?: any) => {
+        // 捕获股票代码（步骤2完成时）
+        if (step === 2 && data?.stock_code) {
+          stockTicker = data.stock_code
+        }
+
         const steps = PREDICTION_STEPS.map((s, idx) => {
           const stepNum = idx + 1
           if (stepNum <= step) {
@@ -336,26 +382,35 @@ export function ChatArea({ sessionId: externalSessionId, onSessionCreated }: Cha
 
       // 结构化数据
       onData: (dataType: string, data: unknown, predStart?: string) => {
+        console.log('[ChatArea] onData received:', dataType, data)
         if (dataType === 'time_series_original') {
           accumulatedTimeSeriesOriginal = data as TimeSeriesPoint[]
-          updateContentsFromStreamData(assistantMessageId, accumulatedTimeSeriesOriginal, null, accumulatedNews, accumulatedEmotion, null, '', backendSessionId, backendMessageId)
+          updateContentsFromStreamData(assistantMessageId, accumulatedTimeSeriesOriginal, null, accumulatedNews, accumulatedEmotion, null, '', backendSessionId, backendMessageId, accumulatedAnomalyZones, stockTicker)
         } else if (dataType === 'time_series_full') {
           accumulatedTimeSeriesFull = data as TimeSeriesPoint[]
           predictionStartDay = predStart || ''
-          updateContentsFromStreamData(assistantMessageId, accumulatedTimeSeriesOriginal, accumulatedTimeSeriesFull, accumulatedNews, accumulatedEmotion, null, predictionStartDay, backendSessionId, backendMessageId)
+          updateContentsFromStreamData(assistantMessageId, accumulatedTimeSeriesOriginal, accumulatedTimeSeriesFull, accumulatedNews, accumulatedEmotion, null, predictionStartDay, backendSessionId, backendMessageId, accumulatedAnomalyZones, stockTicker)
         } else if (dataType === 'news') {
           accumulatedNews = data as NewsItem[]
-          updateContentsFromStreamData(assistantMessageId, accumulatedTimeSeriesOriginal, accumulatedTimeSeriesFull.length > 0 ? accumulatedTimeSeriesFull : null, accumulatedNews, accumulatedEmotion, null, predictionStartDay, backendSessionId, backendMessageId)
+          updateContentsFromStreamData(assistantMessageId, accumulatedTimeSeriesOriginal, accumulatedTimeSeriesFull.length > 0 ? accumulatedTimeSeriesFull : null, accumulatedNews, accumulatedEmotion, null, predictionStartDay, backendSessionId, backendMessageId, accumulatedAnomalyZones, stockTicker)
         } else if (dataType === 'emotion') {
           const emotionData = data as { score: number; description: string }
           accumulatedEmotion = emotionData
-          updateContentsFromStreamData(assistantMessageId, accumulatedTimeSeriesOriginal, accumulatedTimeSeriesFull.length > 0 ? accumulatedTimeSeriesFull : null, accumulatedNews, accumulatedEmotion, null, predictionStartDay, backendSessionId, backendMessageId)
+          updateContentsFromStreamData(assistantMessageId, accumulatedTimeSeriesOriginal, accumulatedTimeSeriesFull.length > 0 ? accumulatedTimeSeriesFull : null, accumulatedNews, accumulatedEmotion, null, predictionStartDay, backendSessionId, backendMessageId, accumulatedAnomalyZones, stockTicker)
+        } else if (dataType === 'anomaly_zones') {
+          console.log('[ChatArea] Received anomaly_zones:', data)
+          const zonesData = data as { zones: any[]; ticker: string }
+          accumulatedAnomalyZones = zonesData.zones || []
+          stockTicker = zonesData.ticker || ''
+          console.log('[ChatArea] Extracted - zones:', accumulatedAnomalyZones.length, 'ticker:', stockTicker)
+          // 异常区数据收到后立即更新图表
+          updateContentsFromStreamData(assistantMessageId, accumulatedTimeSeriesOriginal, accumulatedTimeSeriesFull.length > 0 ? accumulatedTimeSeriesFull : null, accumulatedNews, accumulatedEmotion, null, predictionStartDay, backendSessionId, backendMessageId, accumulatedAnomalyZones, stockTicker)
         }
       },
 
       // 报告流式（累积）
       onReportChunk: (content: string) => {
-        updateContentsFromStreamData(assistantMessageId, accumulatedTimeSeriesOriginal, accumulatedTimeSeriesFull.length > 0 ? accumulatedTimeSeriesFull : null, accumulatedNews, accumulatedEmotion, content, predictionStartDay, backendSessionId, backendMessageId)
+        updateContentsFromStreamData(assistantMessageId, accumulatedTimeSeriesOriginal, accumulatedTimeSeriesFull.length > 0 ? accumulatedTimeSeriesFull : null, accumulatedNews, accumulatedEmotion, content, predictionStartDay, backendSessionId, backendMessageId, accumulatedAnomalyZones, stockTicker)
       },
 
       // 聊天流式（累积）
@@ -941,7 +996,9 @@ export function ChatArea({ sessionId: externalSessionId, onSessionCreated }: Cha
     conclusion: string | null,
     _predictionStart: string,  // 保留参数用于未来可能的扩展
     backendSessionId?: string,  // 用于回测功能
-    backendMessageId?: string   // 用于回测功能
+    backendMessageId?: string,   // 用于回测功能
+    anomalyZones?: any[],  // 异常区域
+    ticker?: string  // 股票代码
   ) => {
     setMessages((prev: Message[]) => prev.map((msg: Message) => {
       if (msg.id !== messageId) return msg
@@ -997,8 +1054,11 @@ export function ChatArea({ sessionId: externalSessionId, onSessionCreated }: Cha
           },
           sessionId: backendSessionId,
           messageId: backendMessageId,
-          originalData: timeSeriesOriginal
+          originalData: timeSeriesOriginal,
+          anomalyZones: anomalyZones || [],
+          ticker: ticker
         })
+        console.log('[ChatArea] Created chart with anomalyZones:', anomalyZones?.length || 0, 'zones, ticker:', ticker)
       } else if (timeSeriesOriginal.length > 0) {
         // 只有历史图表
         newContents.push({
@@ -1012,7 +1072,9 @@ export function ChatArea({ sessionId: externalSessionId, onSessionCreated }: Cha
           },
           sessionId: backendSessionId,
           messageId: backendMessageId,
-          originalData: timeSeriesOriginal
+          originalData: timeSeriesOriginal,
+          anomalyZones: anomalyZones || [],
+          ticker: ticker
         })
       }
 

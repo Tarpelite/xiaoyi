@@ -7,7 +7,7 @@ API v2 路由
 
 from fastapi import APIRouter
 
-from app.api.v2.endpoints import unified_analysis, sessions
+from app.api.v2.endpoints import unified_analysis, sessions, stock
 
 api_router = APIRouter()
 
@@ -22,4 +22,10 @@ api_router.include_router(
     sessions.router,
     prefix="",
     tags=["v2-sessions"]
+)
+
+api_router.include_router(
+    stock.router,
+    prefix="",
+    tags=["v2-stock"]
 )

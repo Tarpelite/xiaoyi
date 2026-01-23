@@ -201,12 +201,36 @@ class Message:
             data.emotion_des = description
             self._save(data)
 
-    def save_conclusion(self, conclusion: str):
-        """保存综合报告"""
+    def save_anomaly_zones(self, zones: List[Dict], ticker: str):
+        """保存异常区域数据"""
         data = self.get()
         if data:
+            data.anomaly_zones = zones
+            data.anomaly_zones_ticker = ticker
+            self._save(data)
+            print(f"[Message] Saved {len(zones)} anomaly zones for ticker {ticker}")
+    
+    def save_zone_ticker_news(self, ticker: str, date: str, news: List[Dict]):
+        """保存zone-ticker特定日期的新闻缓存"""
+        data = self.get()
+        if data:
+            cache_key = f"{ticker}-{date}"
+            if not isinstance(data.zone_ticker_news, dict):
+                data.zone_ticker_news = {}
+            data.zone_ticker_news[cache_key] = news
+            self._save(data)
+            print(f"[Message] Cached {len(news)} news for {cache_key}")
+
+    def save_conclusion(self, conclusion: str):
+        """保存综合报告 - 保留现有数据"""
+        data = self.get()
+        if data:
+            # 更新existing data，保留zones等字段
             data.conclusion = conclusion
             self._save(data)
+            print(f"[Message] Updated conclusion, preserved zones: {len(data.anomaly_zones)}, news: {len(data.news_list)}")
+        else:
+            print("[Message] WARNING: No existing data to update conclusion!")
 
     # ========== 状态管理 ==========
 
