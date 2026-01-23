@@ -52,6 +52,7 @@ from app.core.workflows import (
     run_forecast,
     df_to_points,
     recommend_forecast_params,
+    select_best_model,
 )
 
 
@@ -67,6 +68,11 @@ class StreamingTaskProcessor:
     5. 模型预测 - 返回预测结果
     6. 报告生成 - 流式返回报告内容
     """
+    
+    # Baseline 惩罚机制开关
+    # True: 启用惩罚机制，用户指定模型不如 baseline 时降级为 baseline
+    # False: 禁用惩罚机制，即使最佳模型不如 baseline 也使用最佳模型
+    ENABLE_BASELINE_PENALTY = False
 
     def __init__(self):
         self.intent_agent = IntentAgent()
@@ -84,7 +90,7 @@ class StreamingTaskProcessor:
         message_id: str,
         user_input: str,
         event_queue: asyncio.Queue | None,
-        model_name: str = "prophet"
+        model_name: Optional[str] = None
     ):
         """
         执行完全流式任务
@@ -121,6 +127,21 @@ class StreamingTaskProcessor:
             if not intent:
                 await self._emit_error(event_queue, message, "意图识别失败")
                 return
+
+            # 如果用户通过 API 指定了模型，覆盖意图识别的结果
+            print(f"[ModelSelection] API 传入的 model_name: {model_name}")
+            print(f"[ModelSelection] 意图识别返回的 forecast_model: {intent.forecast_model}")
+            if model_name is not None:
+                intent.forecast_model = model_name
+                print(f"[ModelSelection] 使用 API 指定的模型: {model_name}")
+            else:
+                # 如果用户没有通过 API 指定模型，且 LLM 返回的是 "prophet"（可能是默认值），
+                # 则将其设为 None，触发自动模型选择
+                if intent.forecast_model == "prophet":
+                    print(f"[ModelSelection] 检测到 LLM 返回了 'prophet'，将其设为 None 以触发自动选择")
+                    intent.forecast_model = None
+                else:
+                    print(f"[ModelSelection] LLM 返回的模型不是 'prophet'，保持原值: {intent.forecast_model}")
 
             # 保存意图
             message.save_unified_intent(intent)
@@ -465,7 +486,169 @@ class StreamingTaskProcessor:
             "step": 5,
             "step_name": "模型预测"
         })
-        message.update_step_detail(5, "running", f"训练 {intent.forecast_model.upper()} 模型...")
+        message.update_step_detail(5, "running", "选择最佳模型...")
+
+        # 计算预测天数
+        last_date = df['ds'].max().to_pydatetime()
+        print(f"[ModelSelection] 最后日期: {last_date}")
+        target_date_from_start = last_date + timedelta(days=90)
+        print(f"[ModelSelection] 目标日期从开始: {target_date_from_start}")
+        target_date_to_today = datetime.now()
+        print(f"[ModelSelection] 目标日期到今天: {target_date_to_today}")
+        target_date = max(target_date_from_start, target_date_to_today)
+        print(f"[ModelSelection] 目标日期: {target_date}")
+        forecast_horizon = max((target_date - last_date).days, 1)
+        print(f"[ModelSelection] 预测天数: {forecast_horizon}")
+
+        # 模型选择：构建候选模型列表
+        candidate_models = ["prophet", "xgboost", "randomforest", "dlinear"]
+        user_specified_model = intent.forecast_model
+        print(f"[ModelSelection] 用户指定模型: {user_specified_model}")
+
+        # 调用模型选择器
+        try:
+            selection_result = await select_best_model(
+                df,
+                candidate_models,
+                forecast_horizon,
+                n_windows=3,
+                min_train_size=60
+            )
+
+            best_model = selection_result["best_model"]
+            baseline = selection_result["baseline"]
+            model_comparison = selection_result["metrics"]
+            is_better_than_baseline = selection_result["is_better_than_baseline"]
+
+            print(f"[ModelSelection] 选择的最佳模型: {best_model}")
+            print(f"[ModelSelection] Baseline: {baseline}")
+            print(f"[ModelSelection] 用户指定模型: {user_specified_model}")
+
+            # 确定最终使用的模型并生成解释信息
+            model_selection_reason = ""
+            enable_baseline_penalty = self.ENABLE_BASELINE_PENALTY
+            
+            if not user_specified_model or user_specified_model == "auto":
+                print(f"[ModelSelection] 进入自动选择分支")
+                # 用户未指定模型，使用最佳模型
+                final_model = best_model
+                print(f"[ModelSelection] 最终模型: {final_model}")
+                # 生成解释：最佳模型在最近 n_windows 个时间窗口的 MAE 均低于 baseline
+                best_mae = model_comparison.get(best_model)
+                baseline_mae = model_comparison.get(baseline)
+                
+                if best_mae is not None and baseline_mae is not None:
+                    model_name_upper = best_model.upper()
+                    baseline_name = baseline.replace("_", " ").title()
+                    if enable_baseline_penalty and best_mae >= baseline_mae:
+                        # 如果启用惩罚机制且最佳模型不如 baseline，使用 baseline
+                        final_model = baseline
+                        model_selection_reason = (
+                            f"最佳模型 {model_name_upper} 在最近 3 个时间窗口的 MAE ({best_mae:.4f}) "
+                            f"不优于 {baseline_name} ({baseline_mae:.4f})，已自动降级为 {baseline_name}"
+                        )
+                    else:
+                        model_selection_reason = (
+                            f"{model_name_upper} 在最近 3 个时间窗口的 MAE ({best_mae:.4f}) "
+                            f"均低于 {baseline_name} ({baseline_mae:.4f})"
+                        )
+                else:
+                    model_selection_reason = f"自动选择 {best_model.upper()} 作为最佳模型"
+            else:
+                # 用户指定了模型
+                print(f"[ModelSelection] 进入用户指定模型分支，用户指定: {user_specified_model}")
+                user_model_mae = model_comparison.get(user_specified_model)
+                baseline_mae = model_comparison.get(baseline)
+
+                # 根据开关决定是否启用 baseline 惩罚机制
+                if enable_baseline_penalty and (
+                    user_model_mae is not None and baseline_mae is not None and
+                    user_model_mae >= baseline_mae
+                ):
+                    # 启用惩罚机制：如果用户指定的模型 MAE >= baseline，则降级为 baseline
+                    final_model = baseline
+                    user_model_name = user_specified_model.upper()
+                    baseline_name = baseline.replace("_", " ").title()
+                    model_selection_reason = (
+                        f"用户指定模型 {user_model_name} 在历史回测中不优于基线 "
+                        f"({user_model_mae:.4f} >= {baseline_mae:.4f})，已自动降级为 {baseline_name}"
+                    )
+                else:
+                    # 禁用惩罚机制或用户模型优于 baseline：使用用户指定的模型
+                    final_model = user_specified_model
+                    user_model_name = user_specified_model.upper()
+                    if user_model_mae is not None:
+                        if not enable_baseline_penalty and baseline_mae is not None and user_model_mae >= baseline_mae:
+                            # 禁用惩罚机制但用户模型不如 baseline
+                            model_selection_reason = (
+                                f"使用用户指定的 {user_model_name} 模型 "
+                                f"(历史回测 MAE: {user_model_mae:.4f}，baseline: {baseline_mae:.4f})"
+                            )
+                        else:
+                            model_selection_reason = (
+                                f"使用用户指定的 {user_model_name} 模型 "
+                                f"(历史回测 MAE: {user_model_mae:.4f})"
+                            )
+                    else:
+                        model_selection_reason = f"使用用户指定的 {user_model_name} 模型"
+
+            # 发送模型选择信息
+            await self._emit_event(event_queue, message, {
+                "type": "model_selection",
+                "selected_model": final_model,
+                "best_model": best_model,
+                "baseline": baseline,
+                "model_comparison": model_comparison,
+                "is_better_than_baseline": is_better_than_baseline,
+                "user_specified_model": user_specified_model,
+                "model_selection_reason": model_selection_reason
+            })
+
+            # 保存模型选择信息到 Message
+            message.save_model_selection(
+                final_model,
+                model_comparison,
+                is_better_than_baseline
+            )
+            
+            # 保存模型选择原因
+            message.save_model_selection_reason(model_selection_reason)
+
+            print(f"[ModelSelection] 最终确定的模型: {final_model}")
+            message.update_step_detail(5, "running", f"训练 {final_model.upper()} 模型...")
+
+        except Exception as e:
+            # 如果模型选择失败，使用用户指定的模型或默认模型
+            print(f"[ModelSelection] 模型选择失败: {e}")
+            final_model = user_specified_model or "prophet"
+            model_comparison = {}
+            is_better_than_baseline = False
+            
+            # 生成失败时的解释信息
+            if user_specified_model:
+                model_selection_reason = (
+                    f"模型选择过程出现错误，使用用户指定的 {user_specified_model.upper()} 模型"
+                )
+            else:
+                model_selection_reason = (
+                    f"模型选择过程出现错误，使用默认的 {final_model.upper()} 模型"
+                )
+
+            await self._emit_event(event_queue, message, {
+                "type": "model_selection",
+                "selected_model": final_model,
+                "best_model": final_model,
+                "baseline": "seasonal_naive",
+                "model_comparison": model_comparison,
+                "is_better_than_baseline": is_better_than_baseline,
+                "user_specified_model": user_specified_model,
+                "selection_failed": True,
+                "error": str(e),
+                "model_selection_reason": model_selection_reason
+            })
+            
+            # 保存模型选择原因
+            message.save_model_selection_reason(model_selection_reason)
 
         prophet_params = await recommend_forecast_params(
             self.sentiment_agent,
@@ -473,18 +656,12 @@ class StreamingTaskProcessor:
             features
         )
 
-        # 计算预测天数
-        last_date = df['ds'].max().to_pydatetime()
-        target_date_from_start = last_date + timedelta(days=90)
-        target_date_to_today = datetime.now()
-        target_date = max(target_date_from_start, target_date_to_today)
-        forecast_horizon = (target_date - last_date).days
-
+        # 只对最终选定的模型调用一次 run_forecast
         forecast_result = await run_forecast(
             df,
-            intent.forecast_model,
-            max(forecast_horizon, 1),
-            prophet_params
+            final_model,
+            forecast_horizon,
+            prophet_params if final_model == "prophet" else None
         )
 
         # 保存并发送预测结果（forecast_result 是 ForecastResult 对象）
@@ -511,11 +688,8 @@ class StreamingTaskProcessor:
         })
         message.update_step_detail(5, "completed", f"预测完成 ({metrics_info})")
 
-        # 保存模型名称
-        session_data = session.get()
-        if session_data:
-            session_data.model_name = intent.forecast_model
-            session._save(session_data)
+        # 保存模型名称到 MessageData（使用最终选定的模型）
+        message.save_model_name(final_model)
 
         # === Step 6: 报告生成（流式） ===
         await self._emit_event(event_queue, message, {

@@ -884,7 +884,7 @@ export function ChatArea({ sessionId: externalSessionId, onSessionCreated }: Cha
 
       // Step 1: 创建后台任务
       const createResult = await createAnalysis(messageToSend, {
-        model: 'prophet',
+        model: undefined,  // undefined 表示自动选择最佳模型
         sessionId: activeSessionId
       })
 
