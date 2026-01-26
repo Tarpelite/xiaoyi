@@ -69,7 +69,7 @@ class StreamingTaskProcessor:
     5. 模型预测 - 返回预测结果
     6. 报告生成 - 流式返回报告内容
     """
-    
+
     # Baseline 惩罚机制开关
     # True: 启用惩罚机制，用户指定模型不如 baseline 时降级为 baseline
     # False: 禁用惩罚机制，即使最佳模型不如 baseline 也使用最佳模型
@@ -91,7 +91,7 @@ class StreamingTaskProcessor:
         message_id: str,
         user_input: str,
         event_queue: asyncio.Queue | None,
-        model_name: Optional[str] = None
+        model_name: Optional[str] = None,
     ):
         """
         执行完全流式任务
@@ -131,7 +131,9 @@ class StreamingTaskProcessor:
 
             # 如果用户通过 API 指定了模型，覆盖意图识别的结果
             print(f"[ModelSelection] API 传入的 model_name: {model_name}")
-            print(f"[ModelSelection] 意图识别返回的 forecast_model: {intent.forecast_model}")
+            print(
+                f"[ModelSelection] 意图识别返回的 forecast_model: {intent.forecast_model}"
+            )
             if model_name is not None:
                 intent.forecast_model = model_name
                 print(f"[ModelSelection] 使用 API 指定的模型: {model_name}")
@@ -139,10 +141,14 @@ class StreamingTaskProcessor:
                 # 如果用户没有通过 API 指定模型，且 LLM 返回的是 "prophet"（可能是默认值），
                 # 则将其设为 None，触发自动模型选择
                 if intent.forecast_model == "prophet":
-                    print(f"[ModelSelection] 检测到 LLM 返回了 'prophet'，将其设为 None 以触发自动选择")
+                    print(
+                        f"[ModelSelection] 检测到 LLM 返回了 'prophet'，将其设为 None 以触发自动选择"
+                    )
                     intent.forecast_model = None
                 else:
-                    print(f"[ModelSelection] LLM 返回的模型不是 'prophet'，保持原值: {intent.forecast_model}")
+                    print(
+                        f"[ModelSelection] LLM 返回的模型不是 'prophet'，保持原值: {intent.forecast_model}"
+                    )
 
             # 保存意图
             message.save_unified_intent(intent)
@@ -762,9 +768,7 @@ class StreamingTaskProcessor:
             message,
             {"type": "step_start", "step": 5, "step_name": "模型预测"},
         )
-        message.update_step_detail(
-            5, "running", f"训练 {intent.forecast_model.upper()} 模型..."
-        )
+        message.update_step_detail(5, "running", f"训练模型...")
 
         prophet_params = await recommend_forecast_params(
             self.sentiment_agent, emotion_result or {}, features
@@ -789,11 +793,7 @@ class StreamingTaskProcessor:
         # 调用模型选择器
         try:
             selection_result = await select_best_model(
-                df,
-                candidate_models,
-                forecast_horizon,
-                n_windows=3,
-                min_train_size=60
+                df, candidate_models, forecast_horizon, n_windows=3, min_train_size=60
             )
 
             best_model = selection_result["best_model"]
@@ -808,7 +808,7 @@ class StreamingTaskProcessor:
             # 确定最终使用的模型并生成解释信息
             model_selection_reason = ""
             enable_baseline_penalty = self.ENABLE_BASELINE_PENALTY
-            
+
             if not user_specified_model or user_specified_model == "auto":
                 print(f"[ModelSelection] 进入自动选择分支")
                 # 用户未指定模型，使用最佳模型
@@ -817,7 +817,7 @@ class StreamingTaskProcessor:
                 # 生成解释：最佳模型在最近 n_windows 个时间窗口的 MAE 均低于 baseline
                 best_mae = model_comparison.get(best_model)
                 baseline_mae = model_comparison.get(baseline)
-                
+
                 if best_mae is not None and baseline_mae is not None:
                     model_name_upper = best_model.upper()
                     baseline_name = baseline.replace("_", " ").title()
@@ -834,17 +834,22 @@ class StreamingTaskProcessor:
                             f"均低于 {baseline_name} ({baseline_mae:.4f})"
                         )
                 else:
-                    model_selection_reason = f"自动选择 {best_model.upper()} 作为最佳模型"
+                    model_selection_reason = (
+                        f"自动选择 {best_model.upper()} 作为最佳模型"
+                    )
             else:
                 # 用户指定了模型
-                print(f"[ModelSelection] 进入用户指定模型分支，用户指定: {user_specified_model}")
+                print(
+                    f"[ModelSelection] 进入用户指定模型分支，用户指定: {user_specified_model}"
+                )
                 user_model_mae = model_comparison.get(user_specified_model)
                 baseline_mae = model_comparison.get(baseline)
 
                 # 根据开关决定是否启用 baseline 惩罚机制
                 if enable_baseline_penalty and (
-                    user_model_mae is not None and baseline_mae is not None and
-                    user_model_mae >= baseline_mae
+                    user_model_mae is not None
+                    and baseline_mae is not None
+                    and user_model_mae >= baseline_mae
                 ):
                     # 启用惩罚机制：如果用户指定的模型 MAE >= baseline，则降级为 baseline
                     final_model = baseline
@@ -859,7 +864,11 @@ class StreamingTaskProcessor:
                     final_model = user_specified_model
                     user_model_name = user_specified_model.upper()
                     if user_model_mae is not None:
-                        if not enable_baseline_penalty and baseline_mae is not None and user_model_mae >= baseline_mae:
+                        if (
+                            not enable_baseline_penalty
+                            and baseline_mae is not None
+                            and user_model_mae >= baseline_mae
+                        ):
                             # 禁用惩罚机制但用户模型不如 baseline
                             model_selection_reason = (
                                 f"使用用户指定的 {user_model_name} 模型 "
@@ -871,32 +880,38 @@ class StreamingTaskProcessor:
                                 f"(历史回测 MAE: {user_model_mae:.4f})"
                             )
                     else:
-                        model_selection_reason = f"使用用户指定的 {user_model_name} 模型"
+                        model_selection_reason = (
+                            f"使用用户指定的 {user_model_name} 模型"
+                        )
 
             # 发送模型选择信息
-            await self._emit_event(event_queue, message, {
-                "type": "model_selection",
-                "selected_model": final_model,
-                "best_model": best_model,
-                "baseline": baseline,
-                "model_comparison": model_comparison,
-                "is_better_than_baseline": is_better_than_baseline,
-                "user_specified_model": user_specified_model,
-                "model_selection_reason": model_selection_reason
-            })
+            await self._emit_event(
+                event_queue,
+                message,
+                {
+                    "type": "model_selection",
+                    "selected_model": final_model,
+                    "best_model": best_model,
+                    "baseline": baseline,
+                    "model_comparison": model_comparison,
+                    "is_better_than_baseline": is_better_than_baseline,
+                    "user_specified_model": user_specified_model,
+                    "model_selection_reason": model_selection_reason,
+                },
+            )
 
             # 保存模型选择信息到 Message
             message.save_model_selection(
-                final_model,
-                model_comparison,
-                is_better_than_baseline
+                final_model, model_comparison, is_better_than_baseline
             )
-            
+
             # 保存模型选择原因
             message.save_model_selection_reason(model_selection_reason)
 
             print(f"[ModelSelection] 最终确定的模型: {final_model}")
-            message.update_step_detail(5, "running", f"训练 {final_model.upper()} 模型...")
+            message.update_step_detail(
+                5, "running", f"训练 {final_model.upper()} 模型..."
+            )
 
         except Exception as e:
             # 如果模型选择失败，使用用户指定的模型或默认模型
@@ -904,37 +919,37 @@ class StreamingTaskProcessor:
             final_model = user_specified_model or "prophet"
             model_comparison = {}
             is_better_than_baseline = False
-            
+
             # 生成失败时的解释信息
             if user_specified_model:
-                model_selection_reason = (
-                    f"模型选择过程出现错误，使用用户指定的 {user_specified_model.upper()} 模型"
-                )
+                model_selection_reason = f"模型选择过程出现错误，使用用户指定的 {user_specified_model.upper()} 模型"
             else:
                 model_selection_reason = (
                     f"模型选择过程出现错误，使用默认的 {final_model.upper()} 模型"
                 )
 
-            await self._emit_event(event_queue, message, {
-                "type": "model_selection",
-                "selected_model": final_model,
-                "best_model": final_model,
-                "baseline": "seasonal_naive",
-                "model_comparison": model_comparison,
-                "is_better_than_baseline": is_better_than_baseline,
-                "user_specified_model": user_specified_model,
-                "selection_failed": True,
-                "error": str(e),
-                "model_selection_reason": model_selection_reason
-            })
-            
+            await self._emit_event(
+                event_queue,
+                message,
+                {
+                    "type": "model_selection",
+                    "selected_model": final_model,
+                    "best_model": final_model,
+                    "baseline": "seasonal_naive",
+                    "model_comparison": model_comparison,
+                    "is_better_than_baseline": is_better_than_baseline,
+                    "user_specified_model": user_specified_model,
+                    "selection_failed": True,
+                    "error": str(e),
+                    "model_selection_reason": model_selection_reason,
+                },
+            )
+
             # 保存模型选择原因
             message.save_model_selection_reason(model_selection_reason)
 
         prophet_params = await recommend_forecast_params(
-            self.sentiment_agent,
-            emotion_result or {},
-            features
+            self.sentiment_agent, emotion_result or {}, features
         )
 
         # 只对最终选定的模型调用一次 run_forecast
@@ -1354,9 +1369,9 @@ class StreamingTaskProcessor:
     ):
         """发送事件到队列、PubSub 和 Stream"""
         # Debug logging for anomaly_zones
-        if event.get("data_type") == "anomaly_zones":
-            print(f"[SSE DEBUG] Emitting anomaly_zones event: {event}")
-            print(f"[SSE DEBUG] JSON payload: {json.dumps(event)}")
+        # if event.get("data_type") == "anomaly_zones":
+        # print(f"[SSE DEBUG] Emitting anomaly_zones event: {event}")
+        # print(f"[SSE DEBUG] JSON payload: {json.dumps(event)}")
 
         # 1. 发送到本地队列（如果存在）
         if event_queue:
@@ -1368,8 +1383,8 @@ class StreamingTaskProcessor:
             json_payload = json.dumps(event)
             self.redis.publish(channel, json_payload)
 
-            if event.get("data_type") == "anomaly_zones":
-                print(f"[SSE DEBUG] Published to Redis channel: {channel}")
+            # if event.get("data_type") == "anomaly_zones":
+            #     print(f"[SSE DEBUG] Published to Redis channel: {channel}")
 
             # 3. 持久化到 Stream（供断点续传使用）
             stream_key = f"stream-events:{message.message_id}"
