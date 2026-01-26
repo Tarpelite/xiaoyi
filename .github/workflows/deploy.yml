@@ -52,7 +52,7 @@ jobs:
           REDIS_PORT=6379
           REDIS_DB=0
           RAG_SERVICE_URL=http://{{ secrets.RAG_SERVICE_IP }}:8000
-          MONGODB_HOST=10.139.197.213
+          MONGODB_HOST=localhost
           MONGODB_PORT=27017
           MONGODB_USERNAME = "xiaoyi_user"
           MONGODB_PASSWORD = "ACTact123@buaa#"
