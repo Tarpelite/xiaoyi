@@ -1368,10 +1368,6 @@ class StreamingTaskProcessor:
         self, event_queue: asyncio.Queue | None, message: Message, event: Dict
     ):
         """发送事件到队列、PubSub 和 Stream"""
-        # Debug logging for anomaly_zones
-        # if event.get("data_type") == "anomaly_zones":
-        # print(f"[SSE DEBUG] Emitting anomaly_zones event: {event}")
-        # print(f"[SSE DEBUG] JSON payload: {json.dumps(event)}")
 
         # 1. 发送到本地队列（如果存在）
         if event_queue:
@@ -1382,9 +1378,6 @@ class StreamingTaskProcessor:
             channel = f"stream:{message.message_id}"
             json_payload = json.dumps(event)
             self.redis.publish(channel, json_payload)
-
-            # if event.get("data_type") == "anomaly_zones":
-            #     print(f"[SSE DEBUG] Published to Redis channel: {channel}")
 
             # 3. 持久化到 Stream（供断点续传使用）
             stream_key = f"stream-events:{message.message_id}"
