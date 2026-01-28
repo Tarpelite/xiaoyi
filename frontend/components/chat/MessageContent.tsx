@@ -1,11 +1,11 @@
 'use client'
 
-import { useState, useMemo, useRef, useCallback, useEffect } from 'react'
+import { useState, useMemo, useRef, useCallback, useEffect, Fragment } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { LineChart, Line, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, ReferenceLine, ReferenceArea, ReferenceDot, Label } from 'recharts'
-import { RotateCcw, Move } from 'lucide-react'
+import { RotateCcw, Move, Sparkles } from 'lucide-react'
 import type { TextContent, ChartContent, TableContent, StockContent } from './ChatArea'
 import { useBacktestSimulation } from '@/hooks/useBacktestSimulation'
 import { BacktestControls } from './BacktestControls'
@@ -293,7 +293,7 @@ export function MessageContent({ content }: MessageContentProps) {
 
 // 交互式图表组件，支持鼠标拖拽平移、滚轮缩放、异常区高亮、新闻侧边栏
 function InteractiveChart({ content }: { content: ChartContent }) {
-  const { title, data, chartType = 'line', sessionId, messageId, originalData, anomalyZones = [], ticker, anomalies = [] } = content
+  const { title, data, chartType = 'line', sessionId, messageId, originalData, anomalyZones = [], semantic_zones = [], ticker, anomalies = [] } = content as any
 
   // 新闻侧边栏状态
   const [newsSidebarOpen, setNewsSidebarOpen] = useState(false)
@@ -307,6 +307,7 @@ function InteractiveChart({ content }: { content: ChartContent }) {
   // Algorithm Selection State - Default to 'plr'
   const [trendAlgo, setTrendAlgo] = useState<string>('plr');
   const [anomalyAlgo, setAnomalyAlgo] = useState<string>('all');
+  const [useSemanticRegimes, setUseSemanticRegimes] = useState(true); // Toggle for new view
 
   // 从URL恢复新闻侧栏状态（仅在ticker可用时）
   useEffect(() => {
@@ -418,21 +419,21 @@ function InteractiveChart({ content }: { content: ChartContent }) {
     }
 
     // 正常模式
-    return data.labels.map((label, index) => {
+    return data.labels.map((label: any, index: any) => {
       const item: Record<string, string | number | null> = { name: label }
-      data.datasets.forEach((dataset) => {
+      data.datasets.forEach((dataset: any) => {
         item[dataset.label] = dataset.data[index]
       })
       return item
-    }).filter(item => isWeekday(item.name as string))
+    }).filter((item: any) => isWeekday(item.name as string))
   }, [data, backtest.chartData])
 
   // 计算Y轴范围（自适应）- 基于所有数据，保持一致性
   const yAxisDomain = useMemo(() => {
     // 收集所有非null的数值
     const allValues: number[] = []
-    chartData.forEach((item) => {
-      data.datasets.forEach((dataset) => {
+    chartData.forEach((item: any) => {
+      data.datasets.forEach((dataset: any) => {
         const value = item[dataset.label]
         if (value !== null && value !== undefined && typeof value === 'number' && !isNaN(value)) {
           allValues.push(value)
@@ -496,13 +497,13 @@ function InteractiveChart({ content }: { content: ChartContent }) {
   // DIAGNOSTIC: Check if zone dates exist in chartData AND their positions
   useEffect(() => {
     if (anomalyZones && anomalyZones.length > 0 && chartData.length > 0) {
-      const chartDates = new Set(chartData.map(d => d.name))
+      const chartDates = new Set(chartData.map((d: any) => d.name))
       console.log('[DIAGNOSTIC] chartData range:', chartData[0]?.name, 'to', chartData[chartData.length - 1]?.name, `(${chartData.length} points)`)
       console.log('[DIAGNOSTIC] viewStartIndex:', viewStartIndex, 'viewEndIndex:', viewEndIndex, 'visible:', viewEndIndex - viewStartIndex + 1, 'points')
 
-      anomalyZones.forEach((zone, idx) => {
-        const startIndex = chartData.findIndex(d => d.name === zone.startDate)
-        const endIndex = chartData.findIndex(d => d.name === zone.endDate)
+      anomalyZones.forEach((zone: any, idx: any) => {
+        const startIndex = chartData.findIndex((d: any) => d.name === zone.startDate)
+        const endIndex = chartData.findIndex((d: any) => d.name === zone.endDate)
         const isInViewport = startIndex >= viewStartIndex && endIndex <= viewEndIndex
         const hasStart = chartDates.has(zone.startDate)
         const hasEnd = chartDates.has(zone.endDate)
@@ -520,7 +521,7 @@ function InteractiveChart({ content }: { content: ChartContent }) {
       console.log('[Anomaly Rendering] Chart date range:', chartData[0]?.name, 'to', chartData[chartData.length - 1]?.name);
 
       // Check which anomalies are in valid date range
-      const chartDates = new Set(chartData.map(d => d.name));
+      const chartDates = new Set(chartData.map((d: any) => d.name));
       anomalies.forEach((anom: any, idx: number) => {
         const inDateRange = chartDates.has(anom.date);
         const inYRange = anom.price >= yAxisDomain[0] && anom.price <= yAxisDomain[1];
@@ -528,6 +529,182 @@ function InteractiveChart({ content }: { content: ChartContent }) {
       });
     }
   }, [anomalies, chartData, yAxisDomain]);
+
+  // --- Semantic Regimes Logic ---
+  const semanticRegimes = useMemo(() => {
+    // 1. If Backend already provided Semantic Zones, use them directly!
+    // This supports "Event Flow" feature and robust backend merging
+    if (semantic_zones.length > 0) {
+      // Ensure we enrich them with frontend interactions (like active state) although rendering loop handles that
+      // Just return them, they are already formatted
+      return semantic_zones;
+    }
+
+    // 2. Fallback: Frontend Calculation (for legacy cache or other algos)
+    if (!anomalyZones || anomalyZones.length === 0) return [];
+    if (chartData.length === 0) return [];
+
+    // 1. Sort zones by date
+    const sortedZones = [...anomalyZones]
+      .filter(z => trendAlgo === 'all' || (z.method || 'plr') === trendAlgo)
+      .sort((a, b) => new Date(a.startDate).getTime() - new Date(b.startDate).getTime());
+
+    if (sortedZones.length === 0) return [];
+
+    // Helper to get price from chartData
+    const getPrice = (date: string): number | null => {
+      const point = chartData.find((d: any) => d.name === date);
+      if (!point) return null;
+      // Assume first dataset is the main price
+      const label = data.datasets[0]?.label;
+      return ((point as any)[label] as number) || null;
+    };
+
+    // 2. Merge Logic
+    const merged: any[] = [];
+    if (sortedZones.length === 0) return [];
+
+    // let current removed to avoid redeclaration
+
+    // Normalize type for comparison (up/down/sideways)
+    const normalizeType = (type: string) => {
+      const t = type?.toLowerCase() || '';
+      if (t.includes('bull') || t.includes('up')) return 'up';
+      if (t.includes('bear') || t.includes('down')) return 'down';
+      return 'sideways';
+    };
+
+    // [New] Smooth out noise (Sandwich Logic): A(Up) -> B(Down) -> C(Up) => Merge B into Up
+    // Fix: PLR returns 'direction', HMM returns 'type'. Map both to 'type'.
+    const smoothedZones = (sortedZones as any[]).map(z => ({
+      ...z,
+      type: z.type || (z as any).direction || 'sideways'
+    }));
+
+    // 1-pass smoothing with Duration Check to avoid swallowing real corrections
+    for (let pass = 0; pass < 1; pass++) {
+      for (let i = 1; i < smoothedZones.length - 1; i++) {
+        const prev: any = smoothedZones[i - 1];
+        const curr: any = smoothedZones[i];
+        const next: any = smoothedZones[i + 1];
+
+        const prevType = normalizeType(prev.type);
+        const currType = normalizeType(curr.type);
+        const nextType = normalizeType(next.type);
+
+        // If sandwiched between same types, flip current type IF it is short (noise)
+        if (prevType === nextType && currType !== prevType) {
+          const d1 = new Date(curr.startDate).getTime();
+          const d2 = new Date(curr.endDate).getTime();
+          const days = (d2 - d1) / (1000 * 3600 * 24);
+
+          // Only treat as noise if < 7 days (1 week)
+          if (days < 7) {
+            curr.type = prev.type;
+          }
+        }
+      }
+    }
+
+    if (smoothedZones.length === 0) return [];
+
+    let current: any = { ...smoothedZones[0] };
+    current.normalizedType = normalizeType(current.type);
+
+    for (let i = 1; i < smoothedZones.length; i++) {
+      const next: any = smoothedZones[i];
+      const nextType = normalizeType(next.type);
+
+      // Merge if same type and contiguous (or overlap/close)
+      // Simple check: same type
+      if (current.normalizedType === nextType) {
+        // Extend current
+        current.endDate = next.endDate;
+        // Accumulate other props if needed
+      } else {
+        merged.push(current);
+        current = { ...next, normalizedType: nextType };
+      }
+    }
+    merged.push(current);
+
+    // 3. Volatility / Efficiency Ratio Check & Final Enrichment
+    return merged.map(regime => {
+      const startPrice = getPrice(regime.startDate);
+      const endPrice = getPrice(regime.endDate);
+
+      let type = regime.normalizedType;
+      let efficiencyRatio = 1.0;
+
+      // Calculate Efficiency Ratio over the regime range
+      if (startPrice !== null && endPrice !== null) {
+        const startIndex = chartData.findIndex((d: any) => d.name === regime.startDate);
+        const endIndex = chartData.findIndex((d: any) => d.name === regime.endDate);
+
+        if (startIndex !== -1 && endIndex !== -1 && endIndex > startIndex) {
+          const slice = chartData.slice(startIndex, endIndex + 1);
+          const firstLabel = data.datasets[0]?.label;
+          const prices = slice.map((d: any) => (d as any)[firstLabel] as number).filter((p: any) => p !== null);
+
+          if (prices.length > 1) {
+            const netChange = Math.abs(prices[prices.length - 1] - prices[0]);
+            let sumAbsChange = 0;
+            for (let k = 1; k < prices.length; k++) {
+              sumAbsChange += Math.abs(prices[k] - prices[k - 1]);
+            }
+            efficiencyRatio = sumAbsChange === 0 ? 0 : netChange / sumAbsChange;
+
+            // Identify anomalies/events within this regime
+            const regimeEvents = (anomalies || []).filter((a: any) => {
+              return a.date >= regime.startDate && a.date <= regime.endDate;
+            });
+
+            // Calculate total change
+            const totalChange = (startPrice && endPrice)
+              ? ((endPrice - startPrice) / startPrice * 100).toFixed(2) + '%'
+              : 'N/A';
+
+            return {
+              ...regime,
+              displayType: type,
+              efficiencyRatio,
+              totalChange,
+              events: regimeEvents,
+              startPrice,
+              endPrice
+            };
+          }
+        }
+      }
+      // If ER < 0.3, force sideways
+      // If ER < 0.3, force sideways
+      // DISABLED: PLR is volatile, this makes everything grey. Let original type stand.
+      // if (efficiencyRatio < 0.3) {
+      //   type = 'sideways';
+      // }
+      // Identify anomalies/events within this regime
+      const regimeEvents = (anomalies || []).filter((a: any) => {
+        return a.date >= regime.startDate && a.date <= regime.endDate;
+      });
+
+      // Calculate total change
+      const totalChange = (startPrice && endPrice)
+        ? ((endPrice - startPrice) / startPrice * 100).toFixed(2) + '%'
+        : 'N/A';
+
+      return {
+        ...regime,
+        displayType: type,
+        efficiencyRatio,
+        totalChange,
+        events: regimeEvents,
+        startPrice,
+        endPrice
+      };
+    });
+  }, [anomalyZones, chartData, trendAlgo, anomalies, data.datasets]);
+
+  // --- End Semantic Regimes ---
 
 
   // 检查是否处于缩放状态
@@ -812,6 +989,17 @@ function InteractiveChart({ content }: { content: ChartContent }) {
             ]}
           />
           <div className="h-4 w-px bg-white/10 mx-1"></div>
+          <button
+            onClick={() => setUseSemanticRegimes(!useSemanticRegimes)}
+            className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg transition-colors border ${useSemanticRegimes
+              ? 'bg-purple-500/20 text-purple-400 border-purple-500/30'
+              : 'text-gray-400 border-white/5 hover:bg-white/5'
+              }`}
+            title="切换语义化行情视角"
+          >
+            <Sparkles className="w-3.5 h-3.5" />
+            <span>Semantic</span>
+          </button>
           {isZoomed && (
             <>
               <button
@@ -903,7 +1091,66 @@ function InteractiveChart({ content }: { content: ChartContent }) {
               wrapperStyle={{ fontSize: '12px' }}
             />
             {/* 异常区域与悬浮提示 - Bloomberg风格 */}
-            {visibleZones.map((zone: any, idx: number) => {
+            {/* 区域渲染逻辑：语义合并 vs 原始分段 */}
+            {/* 1. Semantic Regimes: Areas */}
+            {useSemanticRegimes && semanticRegimes.map((regime: any, idx: number) => {
+              const isSideways = regime.displayType === 'sideways';
+              const isUp = regime.displayType === 'up';
+
+              // A-share colors: Red for Up, Green for Down
+              const fill = isUp ? '#ef4444' : (isSideways ? '#6b7280' : '#10b981');
+              const opacity = isSideways ? 0.2 : 0.3;
+
+              const uniqueKey = `regime-area-${regime.startDate}-${idx}`;
+
+              return (
+                <ReferenceArea
+                  key={uniqueKey}
+                  x1={regime.startDate}
+                  x2={regime.endDate}
+                  fill={fill}
+                  fillOpacity={opacity}
+                  stroke="none"
+                  className="cursor-pointer hover:opacity-80 transition-opacity"
+                  onClick={() => console.log('View Regime Summary:', regime)}
+                >
+                  <Label
+                    value={regime.totalChange}
+                    position="insideTop"
+                    fill={fill}
+                    fontSize={10}
+                    className="font-mono font-bold opacity-70"
+                  />
+                </ReferenceArea>
+              );
+            })}
+
+            {/* 2. Semantic Regimes: Event Dots */}
+            {useSemanticRegimes && semanticRegimes.flatMap((regime: any, idx: any) =>
+              regime.events.map((ev: any, evIdx: any) => {
+                const dotColor = ev.method === 'bcpd' ? '#fbbf24' : (ev.method === 'matrix_profile' ? '#c084fc' : '#f87171');
+                const yPos = yAxisDomain[0] + (yAxisDomain[1] - yAxisDomain[0]) * 0.05;
+
+                return (
+                  <ReferenceDot
+                    key={`regime-event-${idx}-${evIdx}`}
+                    x={ev.date}
+                    y={yPos}
+                    r={4}
+                    fill={dotColor}
+                    stroke="#fff"
+                    strokeWidth={1}
+                    className="cursor-pointer hover:r-6 transition-all"
+                    isFront={true}
+                  >
+                    <Label value="" />
+                  </ReferenceDot>
+                );
+              })
+            )}
+
+            {/* 3. Legacy Zones (Non-Semantic View) */}
+            {!useSemanticRegimes && visibleZones.map((zone: any, idx: number) => {
               // A股配色：红涨绿跌
               const isPositive = (zone.avg_return || 0) >= 0
               const zoneColor = isPositive
@@ -917,12 +1164,11 @@ function InteractiveChart({ content }: { content: ChartContent }) {
               const uniqueKey = `zone-${zone.startDate}-${zone.endDate}-${idx}`
 
               // FIX: 单日zones需要扩展宽度，否则ReferenceArea不显示
-              // 扩展到前一天（昨天），更符合视觉逻辑
               let displayStartDate = zone.startDate
               if (zone.startDate === zone.endDate) {
-                const startIdx = chartData.findIndex(d => d.name === zone.startDate)
-                if (startIdx > 0) {  // 确保不是第一个点
-                  displayStartDate = chartData[startIdx - 1].name  // 使用昨天的日期
+                const startIdx = chartData.findIndex((d: any) => d.name === zone.startDate)
+                if (startIdx > 0) {
+                  displayStartDate = chartData[startIdx - 1].name
                 }
               }
 
@@ -937,14 +1183,15 @@ function InteractiveChart({ content }: { content: ChartContent }) {
                   strokeOpacity={impact}
                   strokeDasharray={isCalm ? '5 5' : undefined}
                   onMouseEnter={() => setActiveZone(zone)}
-                  onMouseLeave={() => setActiveZone(null)}
+                  // onMouseLeave removed to persist summary for reading
+                  onClick={(e) => { e.stopPropagation(); setActiveZone(zone); }}
                   className="cursor-pointer transition-all duration-300"
                 />
               )
             })}
 
-            {/* 异常点 - ReferenceDot */}
-            {visibleAnomalies.map((anomaly: any, idx: number) => {
+            {/* 异常点 - ReferenceDot (仅在非Semantic模式下显示) */}
+            {!useSemanticRegimes && visibleAnomalies.map((anomaly: any, idx: number) => {
               // Validate anomaly has required fields
               if (!anomaly.date || anomaly.price === undefined) {
                 console.warn(`[Anomaly Rendering] Skipping anomaly ${idx}: missing date or price`, anomaly);
@@ -952,7 +1199,7 @@ function InteractiveChart({ content }: { content: ChartContent }) {
               }
 
               // Check if date exists in FULL chartData (not just displayData which is zoom-filtered)
-              const dateExists = chartData.some(d => d.name === anomaly.date);
+              const dateExists = chartData.some((d: any) => d.name === anomaly.date);
               if (!dateExists) {
                 // Date not in dataset at all (weekends or missing data)
                 return null;
@@ -1018,7 +1265,7 @@ function InteractiveChart({ content }: { content: ChartContent }) {
               if (!splitDate) return null
 
               // 检查分割日期是否在当前显示的数据中
-              const splitDataPoint = displayData.find(item => item.name === splitDate)
+              const splitDataPoint = displayData.find((item: any) => item.name === splitDate)
               if (splitDataPoint) {
                 return (
                   <ReferenceLine
@@ -1071,7 +1318,7 @@ function InteractiveChart({ content }: { content: ChartContent }) {
               </>
             ) : (
               /* 正常模式：原有数据集 */
-              data.datasets.map((dataset, index) => (
+              data.datasets.map((dataset: any, index: any) => (
                 <Line
                   key={dataset.label}
                   type="monotone"
@@ -1089,14 +1336,14 @@ function InteractiveChart({ content }: { content: ChartContent }) {
         </ResponsiveContainer>
 
         {/* X 轴滑块 - 明显的滑块圆点 */}
-        {((hasBacktestSupport && originalData && originalData.length > 60) || (data.datasets.some(d => d.label === '历史价格') && data.datasets.some(d => d.label === '预测价格'))) && plotAreaBounds && (() => {
+        {((hasBacktestSupport && originalData && originalData.length > 60) || (data.datasets.some((d: any) => d.label === '历史价格') && data.datasets.some((d: any) => d.label === '预测价格'))) && plotAreaBounds && (() => {
           // 计算分割点：拖拽时使用临时日期，否则使用回测分割点或历史价格和预测价格的分界点
           let splitDate = isDraggingSlider && tempSplitDate ? tempSplitDate : backtest.splitDate
           let splitIndexInChart = -1
 
           if (splitDate) {
             // 回测模式：使用指定的分割点
-            splitIndexInChart = chartData.findIndex(item => item.name === splitDate)
+            splitIndexInChart = chartData.findIndex((item: any) => item.name === splitDate)
           } else {
             // 正常模式：查找历史价格和预测价格的分界点
             // 找到最后一个有历史价格值的点，下一个点就是预测价格的起点
@@ -1132,7 +1379,7 @@ function InteractiveChart({ content }: { content: ChartContent }) {
           // 计算位置比例（相对于当前显示的 displayData）
           // 需要找到分割日期在 displayData 中的索引，而不是在 chartData 中的索引
           let positionRatio = 0
-          const splitIndexInDisplayData = displayData.findIndex(item => item.name === splitDate)
+          const splitIndexInDisplayData = displayData.findIndex((item: any) => item.name === splitDate)
 
           if (splitIndexInDisplayData >= 0) {
             // 在显示数据中找到，计算位置比例
@@ -1214,7 +1461,7 @@ function InteractiveChart({ content }: { content: ChartContent }) {
                       if (targetIndex >= 0 && targetIndex < chartData.length && originalData) {
                         const targetDate = chartData[targetIndex].name
                         if (typeof targetDate === 'string') {
-                          const originalIndex = originalData.findIndex(p => p.date === targetDate)
+                          const originalIndex = originalData.findIndex((p: any) => p.date === targetDate)
                           if (originalIndex >= 60 && originalIndex < originalData.length) {
                             if (isFinal) {
                               // 释放鼠标时才触发回测更新
@@ -1244,11 +1491,11 @@ function InteractiveChart({ content }: { content: ChartContent }) {
                     updateSplitPoint(e.clientX, false)
 
                     // 绑定全局事件以支持拖拽
-                    window.addEventListener('mousemove', handleMouseMove)
-                    window.addEventListener('mouseup', handleMouseUp)
                   }}
                 >
                   {/* 滑块圆点 - 大而明显 */}
+                  {/* Main Chart Area */}
+
                   <div className="w-full h-full bg-orange-400 rounded-full shadow-xl shadow-orange-400/50 border-2 border-orange-300 cursor-grab active:cursor-grabbing hover:scale-125 hover:shadow-orange-400/70 transition-all duration-200 flex items-center justify-center">
                     {/* 内部白点 */}
                     <div className="w-2 h-2 bg-white/90 rounded-full" />
@@ -1299,7 +1546,7 @@ function InteractiveChart({ content }: { content: ChartContent }) {
                     if (targetIndex >= 0 && targetIndex < chartData.length && originalData) {
                       const targetDate = chartData[targetIndex].name
                       if (typeof targetDate === 'string') {
-                        const originalIndex = originalData.findIndex(p => p.date === targetDate)
+                        const originalIndex = originalData.findIndex((p: any) => p.date === targetDate)
                         if (originalIndex >= 60 && originalIndex < originalData.length) {
                           if (isFinal) {
                             // 释放鼠标时才触发回测更新

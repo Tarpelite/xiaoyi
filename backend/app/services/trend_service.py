@@ -360,3 +360,95 @@ class TrendService:
             )
 
         return res_segments
+
+    def process_semantic_regimes(
+        self, raw_segments: List[Dict], min_duration_days: int = 7
+    ) -> List[Dict]:
+        """
+        Post-process raw segments to create Semantic Regimes.
+        1. Smoothing: Merge short noise segments ("Sandwich" noise).
+        2. Merging: Combine contiguous segments of the same type.
+        """
+        if not raw_segments:
+            return []
+
+        # deep copy to avoid mutating original
+        import copy
+        from datetime import datetime
+
+        segments = copy.deepcopy(raw_segments)
+
+        # Helper: Calculate duration
+        def get_duration(seg):
+            d1 = datetime.strptime(seg["startDate"], "%Y-%m-%d")
+            d2 = datetime.strptime(seg["endDate"], "%Y-%m-%d")
+            return (d2 - d1).days
+
+        # Helper: Normalize type
+        def get_type(seg):
+            return seg.get("type") or seg.get("direction") or "sideways"
+
+        # 1. Smoothing (Sandwich Logic)
+        # Iterate and flip short segments that are sandwiched between same-type segments
+        # Multiple passes usually not needed for simple noise removal, 1 pass is enough
+        for i in range(1, len(segments) - 1):
+            prev = segments[i - 1]
+            curr = segments[i]
+            next_seg = segments[i + 1]
+
+            prev_type = get_type(prev)
+            curr_type = get_type(curr)
+            next_type = get_type(next_seg)
+
+            if prev_type == next_type and curr_type != prev_type:
+                duration = get_duration(curr)
+                if duration < min_duration_days:
+                    # Flip current to match neighbors
+                    # We just change direction/type logic.
+                    # We accept that 'price' might be non-linear, but for Semantic Regime
+                    # we care about the "Phase Classification".
+                    curr["direction"] = prev.get("direction")
+                    curr["type"] = prev.get("type")
+
+        # 2. Merging Contiguous Segments
+        merged_segments = []
+        if not segments:
+            return []
+
+        current_merge = segments[0]
+        # Normalize start/end dates to datetime for calculation if needed, but string is fine for equality check
+        # We need to maintain start/end prices.
+        # Merged segment: Start = first.Start, End = last.End
+        # StartPrice = first.StartPrice, EndPrice = last.EndPrice
+
+        for i in range(1, len(segments)):
+            next_seg = segments[i]
+            curr_type = get_type(current_merge)
+            next_type = get_type(next_seg)
+
+            if curr_type == next_type:
+                # Merge
+                current_merge["endDate"] = next_seg["endDate"]
+                current_merge["endPrice"] = next_seg["endPrice"]
+                # Direction stays same
+            else:
+                # Commit current and start new
+                merged_segments.append(current_merge)
+                current_merge = next_seg
+
+        merged_segments.append(current_merge)
+
+        # Add metadata indicating it's a semantic regime
+        for seg in merged_segments:
+            seg["zone_type"] = "semantic_regime"
+            # Calculate return for the whole merged segment
+            try:
+                start_p = float(seg["startPrice"])
+                end_p = float(seg["endPrice"])
+                ret = (end_p - start_p) / start_p if start_p != 0 else 0
+                seg["avg_return"] = ret
+                seg["summary"] = f"{get_type(seg).title()} ({ret * 100:.1f}%)"
+            except:
+                pass
+
+        return merged_segments

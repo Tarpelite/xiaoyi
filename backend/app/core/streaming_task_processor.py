@@ -542,7 +542,9 @@ class StreamingTaskProcessor:
 
             # === Redis 全局缓存检查 ===
             redis_client = get_redis()
-            cache_key = f"stock_zones_v2:{stock_code}"  # Version 2 cache for new algos
+            cache_key = (
+                f"stock_zones_v4:{stock_code}"  # Version 4: Added semantic_zones
+            )
             cached_data_json = None
 
             try:
@@ -552,14 +554,16 @@ class StreamingTaskProcessor:
 
                     cached_data = json.loads(cached_data_json)
                     anomaly_zones = cached_data.get("zones", [])
+                    semantic_zones = cached_data.get("semantic_zones", [])
                     anomalies = cached_data.get("anomalies", [])
                     print(
-                        f"[AnomalyZones] ✓ Using Redis cached {len(anomaly_zones)} zones for {stock_code}"
+                        f"[AnomalyZones] ✓ Using Redis cached {len(anomaly_zones)} raw zones, {len(semantic_zones)} semantic zones for {stock_code}"
                     )
             except Exception as e:
                 print(f"[AnomalyZones] Redis cache read error: {e}")
                 cached_data_json = None
                 anomaly_zones = []
+                semantic_zones = []
                 anomalies = []
 
             # 如果缓存不存在，计算并保存
@@ -567,7 +571,7 @@ class StreamingTaskProcessor:
                 # 1. Trend Analysis (Regime Segmentation)
                 trend_service = TrendService()
                 # Use all methods but prefer PLR for visual zones
-                trend_results = trend_service.analyze_trend(sig_df, method="all")
+                trend_results = trend_service.analyze_trend(sig_df, method="plr")
 
                 # Debug Prints for Trend Algorithms
                 print("\n" + "=" * 50)
@@ -608,6 +612,50 @@ class StreamingTaskProcessor:
                 all_segments.extend(pelt_segments)
                 all_segments.extend(hmm_segments)
 
+                # NEW: Generate Semantic Broad Regimes (Merged PLR)
+                # This creates broad "Event Flow" phases
+                semantic_raw = trend_service.process_semantic_regimes(
+                    plr_segments, min_duration_days=7
+                )
+                semantic_zones = []
+
+                for seg in semantic_raw:
+                    # Determine sentiment/color
+                    sentiment = "neutral"
+                    direction = seg.get("direction", "").lower()
+                    seg_type = seg.get("type", "").lower()
+
+                    if direction == "up" or seg_type == "bull":
+                        sentiment = "positive"
+                    elif direction == "down" or seg_type == "bear":
+                        sentiment = "negative"
+
+                    # Calculate return
+                    try:
+                        start_p = float(seg.get("startPrice", 0))
+                        end_p = float(seg.get("endPrice", 0))
+                        change_pct = (end_p - start_p) / start_p if start_p else 0
+                    except:
+                        change_pct = 0
+
+                    semantic_zones.append(
+                        {
+                            "startDate": seg["startDate"],
+                            "endDate": seg["endDate"],
+                            "avg_return": change_pct,
+                            "avg_score": abs(change_pct) * 10,
+                            "zone_type": "semantic_regime",
+                            "method": "plr_merged",
+                            "sentiment": sentiment,
+                            "summary": f"{seg.get('direction', seg.get('type', 'Phase')).title()} ({change_pct * 100:.1f}%)",
+                            "description": f"Phase from {seg['startDate']} to {seg['endDate']}. Return: {change_pct * 100:.1f}%",
+                            "type": seg_type,
+                            "normalizedType": seg_type,
+                            "direction": direction,
+                            "events": [],  # Placeholder for events
+                        }
+                    )
+
                 anomaly_zones = []
                 for seg in all_segments:
                     # Determine sentiment/color
@@ -641,6 +689,9 @@ class StreamingTaskProcessor:
                             "sentiment": sentiment,  # Explicit sentiment for frontend
                             "summary": f"{seg.get('direction', seg.get('type', 'Trend')).title()} ({change_pct * 100:.1f}%)",  # Used as fallback title
                             "description": f"Trend detected from {seg['startDate']} to {seg['endDate']}. Return: {change_pct * 100:.1f}%",  # Detail text
+                            "type": seg_type,  # Pass original type (for HMM/Frontend logic)
+                            "normalizedType": seg_type,  # Ensure compatibility
+                            "direction": direction,  # Pass original direction (for PLR)
                         }
                     )
 
@@ -752,7 +803,8 @@ class StreamingTaskProcessor:
                 )
 
             # 为每个区域生成事件摘要（仅当不是从缓存读取时）
-            if anomaly_zones and not cached_data_json:
+            # CHANGED: Generate summaries for SEMANTIC ZONES (Merged) instead of raw zones
+            if semantic_zones and not cached_data_json:
                 try:
                     event_agent = EventSummaryAgent()
 
@@ -768,7 +820,8 @@ class StreamingTaskProcessor:
                         collection_name = os.getenv("MONGODB_COLLECTION", "stock_news")
                         news_collection = mongo_client[db_name][collection_name]
 
-                        for zone in anomaly_zones:
+                        # Process SEMANTIC zones for narrative
+                        for zone in semantic_zones:
                             start = zone["startDate"]
                             end = zone["endDate"]
 
@@ -837,7 +890,11 @@ class StreamingTaskProcessor:
                 try:
                     import json
 
-                    cache_data = {"zones": anomaly_zones, "anomalies": anomalies}
+                    cache_data = {
+                        "zones": anomaly_zones,
+                        "semantic_zones": semantic_zones,
+                        "anomalies": anomalies,
+                    }
 
                     zones_json = json.dumps(cache_data, ensure_ascii=False)
                     redis_client.setex(
@@ -866,6 +923,7 @@ class StreamingTaskProcessor:
                     "data_type": "anomaly_zones",
                     "data": {
                         "zones": anomaly_zones,
+                        "semantic_zones": semantic_zones,
                         "anomalies": anomalies,  # Add anomalies here for frontend
                         "ticker": stock_code,
                     },
