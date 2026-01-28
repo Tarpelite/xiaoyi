@@ -293,7 +293,7 @@ export function MessageContent({ content }: MessageContentProps) {
 
 // 交互式图表组件，支持鼠标拖拽平移、滚轮缩放、异常区高亮、新闻侧边栏
 function InteractiveChart({ content }: { content: ChartContent }) {
-  const { title, data, chartType = 'line', sessionId, messageId, originalData, anomalyZones = [], semantic_zones = [], ticker, anomalies = [] } = content as any
+  const { title, data, chartType = 'line', sessionId, messageId, originalData, anomalyZones = [], semantic_zones = [], prediction_semantic_zones = [], ticker, anomalies = [], predictionStartDay } = content as any
 
   // 新闻侧边栏状态
   const [newsSidebarOpen, setNewsSidebarOpen] = useState(false)
@@ -320,7 +320,7 @@ function InteractiveChart({ content }: { content: ChartContent }) {
     if (savedDate) {
       setSelectedDate(savedDate);
       setNewsSidebarOpen(savedSidebarOpen);
-      console.log('[MessageContent] Restored from URL - date:', savedDate, 'sidebar:', savedSidebarOpen);
+      // console.log('[MessageContent] Restored from URL - date:', savedDate, 'sidebar:', savedSidebarOpen);
     }
   }, [ticker]); // 只在ticker变化时执行
 
@@ -343,6 +343,19 @@ function InteractiveChart({ content }: { content: ChartContent }) {
     };
     fetchNews();
   }, [selectedDate, ticker]);  // 移除newsSidebarOpen依赖，确保刷新后自动加载
+
+  // Debug: Log semantic zones data
+  useEffect(() => {
+    // console.log('[SEMANTIC DATA] semantic_zones:', semantic_zones);
+    // console.log('[SEMANTIC DATA] prediction_semantic_zones:', prediction_semantic_zones);
+    // console.log('[SEMANTIC DATA] anomalyZones:', anomalyZones);
+    // console.log('[SEMANTIC DATA] anomalies:', anomalies);
+
+    if (semantic_zones && semantic_zones.length > 0) {
+      // console.log('[SEMANTIC DATA] First semantic zone:', semantic_zones[0]);
+      // console.log('[SEMANTIC DATA] First zone events:', semantic_zones[0].events);
+    }
+  }, [semantic_zones, prediction_semantic_zones, anomalyZones, anomalies]);
 
   // 图表点击处理
   const handleChartClick = useCallback((e: any) => {
@@ -498,8 +511,8 @@ function InteractiveChart({ content }: { content: ChartContent }) {
   useEffect(() => {
     if (anomalyZones && anomalyZones.length > 0 && chartData.length > 0) {
       const chartDates = new Set(chartData.map((d: any) => d.name))
-      console.log('[DIAGNOSTIC] chartData range:', chartData[0]?.name, 'to', chartData[chartData.length - 1]?.name, `(${chartData.length} points)`)
-      console.log('[DIAGNOSTIC] viewStartIndex:', viewStartIndex, 'viewEndIndex:', viewEndIndex, 'visible:', viewEndIndex - viewStartIndex + 1, 'points')
+      // console.log('[DIAGNOSTIC] chartData range:', chartData[0]?.name, 'to', chartData[chartData.length - 1]?.name, `(${chartData.length} points)`)
+      // console.log('[DIAGNOSTIC] viewStartIndex:', viewStartIndex, 'viewEndIndex:', viewEndIndex, 'visible:', viewEndIndex - viewStartIndex + 1, 'points')
 
       anomalyZones.forEach((zone: any, idx: any) => {
         const startIndex = chartData.findIndex((d: any) => d.name === zone.startDate)
@@ -508,7 +521,7 @@ function InteractiveChart({ content }: { content: ChartContent }) {
         const hasStart = chartDates.has(zone.startDate)
         const hasEnd = chartDates.has(zone.endDate)
 
-        console.log(`[DIAGNOSTIC] Zone ${idx} (${zone.startDate}-${zone.endDate}): start=${hasStart}(idx=${startIndex}), end=${hasEnd}(idx=${endIndex}), inViewport=${isInViewport}`)
+        // console.log(`[DIAGNOSTIC] Zone ${idx} (${zone.startDate}-${zone.endDate}): start=${hasStart}(idx=${startIndex}), end=${hasEnd}(idx=${endIndex}), inViewport=${isInViewport}`)
       })
     }
   }, [anomalyZones, chartData, viewStartIndex, viewEndIndex])
@@ -516,16 +529,16 @@ function InteractiveChart({ content }: { content: ChartContent }) {
   // Debug: Log anomaly data when received
   useEffect(() => {
     if (anomalies && anomalies.length > 0) {
-      console.log(`[Anomaly Rendering] Received ${anomalies.length} anomalies:`, anomalies);
-      console.log('[Anomaly Rendering] Chart Y-axis domain:', yAxisDomain);
-      console.log('[Anomaly Rendering] Chart date range:', chartData[0]?.name, 'to', chartData[chartData.length - 1]?.name);
+      // console.log(`[Anomaly Rendering] Received ${anomalies.length} anomalies:`, anomalies);
+      // console.log('[Anomaly Rendering] Chart Y-axis domain:', yAxisDomain);
+      // console.log('[Anomaly Rendering] Chart date range:', chartData[0]?.name, 'to', chartData[chartData.length - 1]?.name);
 
       // Check which anomalies are in valid date range
       const chartDates = new Set(chartData.map((d: any) => d.name));
       anomalies.forEach((anom: any, idx: number) => {
         const inDateRange = chartDates.has(anom.date);
         const inYRange = anom.price >= yAxisDomain[0] && anom.price <= yAxisDomain[1];
-        console.log(`[Anomaly ${idx}] ${anom.method} at ${anom.date}: price=${anom.price}, inDateRange=${inDateRange}, inYRange=${inYRange}`);
+        // console.log(`[Anomaly ${idx}] ${anom.method} at ${anom.date}: price=${anom.price}, inDateRange=${inDateRange}, inYRange=${inYRange}`);
       });
     }
   }, [anomalies, chartData, yAxisDomain]);
@@ -534,10 +547,79 @@ function InteractiveChart({ content }: { content: ChartContent }) {
   const semanticRegimes = useMemo(() => {
     // 1. If Backend already provided Semantic Zones, use them directly!
     // This supports "Event Flow" feature and robust backend merging
-    if (semantic_zones.length > 0) {
-      // Ensure we enrich them with frontend interactions (like active state) although rendering loop handles that
-      // Just return them, they are already formatted
-      return semantic_zones;
+    // 1. If Backend already provided Semantic Zones, use them directly!
+    // This supports "Event Flow" feature and robust backend merging
+    if (semantic_zones.length > 0 || (prediction_semantic_zones && prediction_semantic_zones.length > 0)) {
+      // 1. Raw zones
+      let historicalZones = semantic_zones.map((z: any) => ({ ...z, isPrediction: false }));
+      let predictionZones = (prediction_semantic_zones || []).map((z: any) => ({ ...z, isPrediction: true }));
+
+      // 2. Strict Interval Partitioning (if predictionStartDay is available)
+      if (predictionStartDay) {
+        // Historical: End at predictionStartDay (inclusive/exclusive boundary logic)
+        historicalZones = historicalZones.map((z: any) => {
+          // If zone starts after prediction start, discard it (it belongs to prediction)
+          if (z.startDate >= predictionStartDay) return null;
+          // If zone ends after prediction start, clip it
+          if (z.endDate > predictionStartDay) return { ...z, endDate: predictionStartDay };
+          return z;
+        }).filter(Boolean);
+
+        // Prediction: Start at predictionStartDay
+        predictionZones = predictionZones.map((z: any) => {
+          // If zone ends before prediction start, discard it (belongs to history)
+          // But usually prediction zones are strictly after.
+          if (z.endDate <= predictionStartDay) return null;
+          // If zone starts before prediction start, clip it
+          if (z.startDate < predictionStartDay) return { ...z, startDate: predictionStartDay };
+          return z;
+        }).filter(Boolean);
+      }
+
+      // 3. CRITICAL: Aggregate raw zones (anomalyZones) into semantic zones as events
+      // This enables the "Event Flow" tooltip to show the timeline of raw zones
+      const aggregateRawZones = (semanticZone: any) => {
+        if (!anomalyZones || anomalyZones.length === 0) return semanticZone;
+
+        // Find all raw zones that overlap with this semantic zone
+        const overlappingRawZones = anomalyZones.filter((rawZone: any) => {
+          const rawStart = new Date(rawZone.startDate).getTime();
+          const rawEnd = new Date(rawZone.endDate).getTime();
+          const semStart = new Date(semanticZone.startDate).getTime();
+          const semEnd = new Date(semanticZone.endDate).getTime();
+
+          // Check if there's any overlap
+          return rawStart <= semEnd && rawEnd >= semStart;
+        });
+
+        // Convert raw zones to event format for tooltip display
+        const events = overlappingRawZones.map((rawZone: any) => ({
+          startDate: rawZone.startDate,
+          endDate: rawZone.endDate,
+          summary: rawZone.summary || rawZone.event_summary || 'Raw Zone Event',
+          event_summary: rawZone.event_summary || rawZone.summary,
+          avg_return: rawZone.avg_return,
+          startPrice: rawZone.startPrice,
+          endPrice: rawZone.endPrice,
+          type: rawZone.type || rawZone.displayType || 'raw',
+          sentiment: rawZone.sentiment
+        }));
+
+        return {
+          ...semanticZone,
+          events: events.length > 0 ? events : (semanticZone.events || [])
+        };
+      };
+
+      // Apply aggregation to both historical and prediction zones
+      historicalZones = historicalZones.map(aggregateRawZones);
+      predictionZones = predictionZones.map(aggregateRawZones);
+
+      // Merge history and prediction zones
+      return [
+        ...historicalZones,
+        ...predictionZones
+      ];
     }
 
     // 2. Fallback: Frontend Calculation (for legacy cache or other algos)
@@ -702,7 +784,7 @@ function InteractiveChart({ content }: { content: ChartContent }) {
         endPrice
       };
     });
-  }, [anomalyZones, chartData, trendAlgo, anomalies, data.datasets]);
+  }, [anomalyZones, chartData, trendAlgo, anomalies, data.datasets, semantic_zones, prediction_semantic_zones, predictionStartDay]);
 
   // --- End Semantic Regimes ---
 
@@ -962,45 +1044,28 @@ function InteractiveChart({ content }: { content: ChartContent }) {
         />
       )}
       <div className="flex items-center justify-between mb-3">
-        {shouldShowTitle && (
-          <h4 className="text-sm font-medium text-gray-300">{title}</h4>
-        )}
         <div className="flex items-center gap-2">
-          <AlgoSelect
-            label="趋势"
-            value={trendAlgo}
-            onChange={setTrendAlgo}
-            options={[
-              { label: '分段线性', value: 'plr' },
-              { label: '市场状态', value: 'hmm' },
-              { label: '突变点', value: 'pelt' },
-              { label: '全部', value: 'all' }
-            ]}
-          />
-          <AlgoSelect
-            label="异常"
-            value={anomalyAlgo}
-            onChange={setAnomalyAlgo}
-            options={[
-              { label: '全部', value: 'all' },
-              { label: 'BCPD', value: 'bcpd' },
-              { label: 'STL', value: 'stl_cusum' },
-              { label: 'Matrix', value: 'matrix_profile' }
-            ]}
-          />
-          <div className="h-4 w-px bg-white/10 mx-1"></div>
-          <button
-            onClick={() => setUseSemanticRegimes(!useSemanticRegimes)}
-            className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg transition-colors border ${useSemanticRegimes
-              ? 'bg-purple-500/20 text-purple-400 border-purple-500/30'
-              : 'text-gray-400 border-white/5 hover:bg-white/5'
-              }`}
-            title="切换语义化行情视角"
-          >
-            <Sparkles className="w-3.5 h-3.5" />
-            <span>Semantic</span>
-          </button>
-          {isZoomed && (
+          {shouldShowTitle && (
+            <h4 className="text-sm font-medium text-gray-300">{title}</h4>
+          )}
+          {/* Semantic Toggle Button - Always show if we have zones */}
+          {(semantic_zones.length > 0 || anomalyZones.length > 0) && (
+            <button
+              onClick={() => setUseSemanticRegimes(!useSemanticRegimes)}
+              className={`flex items-center justify-center w-8 h-8 rounded-lg transition-colors border ${useSemanticRegimes
+                ? 'bg-purple-500/20 text-purple-400 border-purple-500/30'
+                : 'text-gray-400 border-white/5 hover:bg-white/5'
+                }`}
+              title="切换语义化行情视角"
+            >
+              <Sparkles className="w-4 h-4" />
+            </button>
+          )}
+        </div>
+
+        <div className="flex items-center gap-2">
+          {/* Help Text / Controls */}
+          {isZoomed ? (
             <>
               <button
                 onClick={handleReset}
@@ -1010,13 +1075,12 @@ function InteractiveChart({ content }: { content: ChartContent }) {
                 <RotateCcw className="w-3.5 h-3.5" />
                 <span>重置</span>
               </button>
-              <div className="flex items-center gap-1 text-xs text-gray-500">
+              <div className="flex items-center gap-1 text-xs text-gray-500 ml-2">
                 <Move className="w-3.5 h-3.5" />
                 <span>拖拽平移 | 滚轮缩放</span>
               </div>
             </>
-          )}
-          {!isZoomed && (
+          ) : (
             <div className="flex items-center gap-1 text-xs text-gray-500">
               <Move className="w-3.5 h-3.5" />
               <span>点击图表后：拖拽平移 | 滚轮缩放</span>
@@ -1094,12 +1158,18 @@ function InteractiveChart({ content }: { content: ChartContent }) {
             {/* 区域渲染逻辑：语义合并 vs 原始分段 */}
             {/* 1. Semantic Regimes: Areas */}
             {useSemanticRegimes && semanticRegimes.map((regime: any, idx: number) => {
-              const isSideways = regime.displayType === 'sideways';
-              const isUp = regime.displayType === 'up';
+              // CRITICAL FIX: Use sentiment field (from backend) instead of displayType
+              const sentiment = regime.sentiment || regime.displayType;
+              const isPositive = sentiment === 'positive' || sentiment === 'up';
+              const isNegative = sentiment === 'negative' || sentiment === 'down';
+              const isSideways = sentiment === 'sideways' || sentiment === 'neutral';
 
-              // A-share colors: Red for Up, Green for Down
-              const fill = isUp ? '#ef4444' : (isSideways ? '#6b7280' : '#10b981');
-              const opacity = isSideways ? 0.2 : 0.3;
+              // A-share colors: Red for Up/Positive, Green for Down/Negative, Gray for Sideways
+              const fill = isPositive ? '#ef4444' : (isNegative ? '#10b981' : '#6b7280');
+
+              // Prediction Styling
+              const isPrediction = regime.isPrediction;
+              const baseOpacity = isPrediction ? 0.15 : (isSideways ? 0.2 : 0.3); // High transparency for prediction
 
               const uniqueKey = `regime-area-${regime.startDate}-${idx}`;
 
@@ -1109,10 +1179,17 @@ function InteractiveChart({ content }: { content: ChartContent }) {
                   x1={regime.startDate}
                   x2={regime.endDate}
                   fill={fill}
-                  fillOpacity={opacity}
-                  stroke="none"
+                  fillOpacity={baseOpacity}
+                  stroke={isPrediction ? fill : "none"}
+                  strokeDasharray={isPrediction ? "5 5" : undefined}
                   className="cursor-pointer hover:opacity-80 transition-opacity"
-                  onClick={() => console.log('View Regime Summary:', regime)}
+                  onMouseEnter={() => {
+                    // console.log('[SEMANTIC ZONE HOVER]', regime);
+                    // console.log('[SEMANTIC ZONE EVENTS]', regime.events);
+                    setActiveZone(regime);
+                  }}
+                  onMouseLeave={() => setActiveZone(null)}
+                  onClick={(e) => { e.stopPropagation(); setActiveZone(regime); }}
                 >
                   <Label
                     value={regime.totalChange}
@@ -1125,31 +1202,57 @@ function InteractiveChart({ content }: { content: ChartContent }) {
               );
             })}
 
-            {/* 2. Semantic Regimes: Event Dots */}
-            {useSemanticRegimes && semanticRegimes.flatMap((regime: any, idx: any) =>
-              regime.events.map((ev: any, evIdx: any) => {
-                const dotColor = ev.method === 'bcpd' ? '#fbbf24' : (ev.method === 'matrix_profile' ? '#c084fc' : '#f87171');
-                const yPos = yAxisDomain[0] + (yAxisDomain[1] - yAxisDomain[0]) * 0.05;
 
-                return (
-                  <ReferenceDot
-                    key={`regime-event-${idx}-${evIdx}`}
-                    x={ev.date}
-                    y={yPos}
-                    r={4}
-                    fill={dotColor}
-                    stroke="#fff"
-                    strokeWidth={1}
-                    className="cursor-pointer hover:r-6 transition-all"
-                    isFront={true}
-                  >
-                    <Label value="" />
-                  </ReferenceDot>
-                );
-              })
-            )}
 
-            {/* 3. Legacy Zones (Non-Semantic View) */}
+
+            {/* 2. Anomalies: Points of Interest */}
+            {visibleAnomalies.map((anom: any, idx: number) => {
+              // Ensure anomaly is within view
+              const isInView = true; // Recharts ReferenceDot handles visibility automatically if x is valid
+
+              if (!isInView) return null;
+
+              const uniqueKey = `anomaly-${anom.date}-${idx}`;
+
+              return (
+                <ReferenceDot
+                  key={uniqueKey}
+                  x={anom.date}
+                  y={anom.price}
+                  r={5}
+                  fill="#FBBF24"  // Yellow-400
+                  stroke="#ffffff"
+                  strokeWidth={2}
+                  isFront={false}
+                  style={{ pointerEvents: useSemanticRegimes ? 'none' : 'auto' }}
+                  className="cursor-pointer transition-opacity"
+                  onMouseEnter={!useSemanticRegimes ? () => {
+                    // Only show anomaly tooltip in raw mode
+                    // In semantic mode, zones already contain this info
+                    const mockZone = {
+                      type: 'anomaly',
+                      displayType: 'anomaly',
+                      startDate: anom.date,
+                      endDate: anom.date,
+                      summary: anom.description || '异常波动点',
+                      event_summary: anom.description,
+                      isAnomaly: true,
+                      data: anom
+                    }
+                    setActiveZone(mockZone);
+                  } : undefined}
+                  onMouseLeave={!useSemanticRegimes ? () => setActiveZone(null) : undefined}
+                >
+                  <Label
+                    value="" // No text inside dot
+                    position="top"
+                  />
+                </ReferenceDot>
+              );
+            })}
+
+
+
             {!useSemanticRegimes && visibleZones.map((zone: any, idx: number) => {
               // A股配色：红涨绿跌
               const isPositive = (zone.avg_return || 0) >= 0
@@ -1178,62 +1281,19 @@ function InteractiveChart({ content }: { content: ChartContent }) {
                   x1={displayStartDate}
                   x2={zone.endDate}
                   fill={zoneColor.fill}
-                  fillOpacity={activeZone === zone ? impact * 1.5 : impact * 0.8}
+                  fillOpacity={impact * 0.8}
                   stroke={zoneColor.stroke}
                   strokeOpacity={impact}
                   strokeDasharray={isCalm ? '5 5' : undefined}
                   onMouseEnter={() => setActiveZone(zone)}
-                  // onMouseLeave removed to persist summary for reading
+                  onMouseLeave={() => setActiveZone(null)}
                   onClick={(e) => { e.stopPropagation(); setActiveZone(zone); }}
                   className="cursor-pointer transition-all duration-300"
                 />
               )
             })}
 
-            {/* 异常点 - ReferenceDot (仅在非Semantic模式下显示) */}
-            {!useSemanticRegimes && visibleAnomalies.map((anomaly: any, idx: number) => {
-              // Validate anomaly has required fields
-              if (!anomaly.date || anomaly.price === undefined) {
-                console.warn(`[Anomaly Rendering] Skipping anomaly ${idx}: missing date or price`, anomaly);
-                return null;
-              }
 
-              // Check if date exists in FULL chartData (not just displayData which is zoom-filtered)
-              const dateExists = chartData.some((d: any) => d.name === anomaly.date);
-              if (!dateExists) {
-                // Date not in dataset at all (weekends or missing data)
-                return null;
-              }
-
-              // Determine color based on algorithm type
-              const colorMap: Record<string, string> = {
-                'bcpd': '#F59E0B',        // Amber for BCPD
-                'stl_cusum': '#EF4444',   // Red for STL+CUSUM
-                'matrix_profile': '#8B5CF6' // Purple for Matrix Profile
-              };
-              const dotColor = colorMap[anomaly.method] || '#F59E0B';
-
-              return (
-                <ReferenceDot
-                  key={`anomaly-${anomaly.method}-${idx}`}
-                  x={anomaly.date}
-                  y={anomaly.price}
-                  r={6}
-                  fill={dotColor}
-                  stroke="#fff"
-                  strokeWidth={2}
-                  className="cursor-pointer hover:r-8 transition-all"
-                >
-                  <Label
-                    value="!"
-                    position="center"
-                    fill="#fff"
-                    fontSize={10}
-                    fontWeight="bold"
-                  />
-                </ReferenceDot>
-              );
-            })}
 
             {/* 鼠标跟随的水平参考线 */}
             {mouseY !== null && plotAreaBounds && (() => {
@@ -1332,6 +1392,137 @@ function InteractiveChart({ content }: { content: ChartContent }) {
                 />
               ))
             )}
+
+            {/* 2. Semantic Regimes: Event Dots (Moved to Top Layer) */}
+            {useSemanticRegimes && semanticRegimes.flatMap((regime: any, idx: any) =>
+              regime.events.map((ev: any, evIdx: any) => {
+                const dotColor = ev.method === 'bcpd' ? '#fbbf24' : (ev.method === 'matrix_profile' ? '#c084fc' : '#f87171');
+                const yPos = yAxisDomain[0] + (yAxisDomain[1] - yAxisDomain[0]) * 0.05;
+
+                return (
+                  <ReferenceDot
+                    key={`regime-event-${idx}-${evIdx}`}
+                    x={ev.date}
+                    y={yPos}
+                    r={4}
+                    fill={dotColor}
+                    stroke="#fff"
+                    strokeWidth={1}
+                    className="cursor-pointer hover:r-6 transition-all"
+                    isFront={true}
+                  >
+                    <Label value="" />
+                  </ReferenceDot>
+                );
+              })
+            )}
+
+            {/* 异常点调试日志 (控制台可见) */}
+            {(() => {
+              console.log("[MessageContent] Anomalies Prop:", anomalies?.length || 0);
+              console.log("[MessageContent] Visible Anomalies:", visibleAnomalies.length);
+              console.log("[MessageContent] Prediction Zones:", prediction_semantic_zones?.length || 0);
+              if (anomalies && anomalies.length > 0 && visibleAnomalies.length === 0) {
+                console.warn("[MessageContent] WARNING: Anomalies exist but none are visible! Check date format match.",
+                  "Anomaly Sample:", anomalies[0],
+                  "ChartData Sample:", chartData[0]
+                );
+              }
+              return null;
+            })()}
+
+            {/* 异常点 - ReferenceDot (Visible in ALL modes, styled as Signal Points) */}
+            {visibleAnomalies.map((anomaly: any, idx: number) => {
+              // Validate anomaly has required fields
+              if (!anomaly.date || anomaly.price === undefined) {
+                // console.warn(`[Anomaly Rendering] Skipping anomaly ${idx}: missing date or price`, anomaly);
+                return null;
+              }
+
+              // Check if date exists in FULL chartData (not just displayData which is zoom-filtered)
+              const dateExists = chartData.some((d: any) => d.name === anomaly.date);
+              if (!dateExists) {
+                // Date not in dataset at all (weekends or missing data)
+                return null;
+              }
+
+              // Color Mapping: Use Yellow/Amber for Signal Service (New Standard)
+              // method 'signal_service' -> #FBBF24 (Amber-400) or #F59E0B (Amber-500)
+              // Keep legacy colors just in case
+              const colorMap: Record<string, string> = {
+                'signal_service': '#FBBF24', // Bright Amber (Eye-catching)
+                'bcpd': '#F59E0B',
+                'stl_cusum': '#EF4444',
+                'matrix_profile': '#8B5CF6'
+              };
+              const dotColor = colorMap[anomaly.method] || '#FBBF24';
+
+              // Size: Magnified for Signal Service
+              const dotSize = anomaly.method === 'signal_service' ? 6 : 5;
+              const hoverSize = anomaly.method === 'signal_service' ? 9 : 7;
+
+              if (anomaly.method === 'signal_service') {
+                return (
+                  <ReferenceDot
+                    key={`anomaly-${anomaly.method}-${idx}`}
+                    x={anomaly.date}
+                    y={anomaly.price}
+                    r={6}
+                    fill={dotColor}
+                    stroke="#fff"
+                    strokeWidth={2}
+                    className="cursor-pointer transition-all duration-300 animate-pulse hover:scale-150 z-50"
+                    isFront={true}
+                    onMouseEnter={() => {
+                      const mockZone = {
+                        type: 'anomaly',
+                        displayType: 'anomaly',
+                        startDate: anomaly.date,
+                        endDate: anomaly.date,
+                        summary: anomaly.description || '异常波动点',
+                        event_summary: anomaly.description,
+                        isAnomaly: true,
+                        data: anomaly
+                      }
+                      setActiveZone(mockZone);
+                    }}
+                    onMouseLeave={() => setActiveZone(null)}
+                  >
+                    <Label value="" />
+                  </ReferenceDot>
+                );
+              }
+
+              return (
+                <ReferenceDot
+                  key={`anomaly-${anomaly.method}-${idx}`}
+                  x={anomaly.date}
+                  y={anomaly.price}
+                  r={5}
+                  fill={dotColor}
+                  stroke="#fff"
+                  strokeWidth={2}
+                  className={`cursor-pointer transition-all duration-300 animate-in zoom-in-50`}
+                  isFront={true}
+                  onMouseEnter={() => {
+                    const mockZone = {
+                      type: 'anomaly',
+                      displayType: 'anomaly',
+                      startDate: anomaly.date,
+                      endDate: anomaly.date,
+                      summary: anomaly.description || '异常波动点',
+                      event_summary: anomaly.description,
+                      isAnomaly: true,
+                      data: anomaly
+                    }
+                    setActiveZone(mockZone);
+                  }}
+                  onMouseLeave={() => setActiveZone(null)}
+                >
+                  <Label value="" />
+                </ReferenceDot>
+              );
+            })}
           </LineChart>
         </ResponsiveContainer>
 
@@ -1597,48 +1788,85 @@ function InteractiveChart({ content }: { content: ChartContent }) {
 
       {/* 异常区悬浮卡片 */}
       <AnimatePresence>
-        {/* Event Capsule - Bloomberg风格事件摘要 */}
-        {activeZone && activeZone.event_summary && (
-          <div className="absolute top-16 left-1/2 -translate-x-1/2 z-50
-                        bg-[#020203] border border-white/10 
-                        px-4 py-2.5 rounded-lg shadow-2xl max-w-lg
-                        animate-in fade-in-0 slide-in-from-top-2 duration-200">
-            <div className="flex items-center gap-3">
-              {/* 高影响力标记 */}
-              {(activeZone.impact || 0) > 0.7 && (
-                <span className="text-lg animate-pulse">✨</span>
-              )}
+        {/* Event Capsule - Bloomberg 风格事件摘要 */}
+        {(() => {
+          // console.log('[TOOLTIP CHECK] activeZone:', activeZone);
+          // console.log('[TOOLTIP CHECK] useSemanticRegimes:', useSemanticRegimes);
+          // console.log('[TOOLTIP CHECK] events:', activeZone?.events);
+          return activeZone && useSemanticRegimes && activeZone.events && activeZone.events.length > 0;
+        })() && (
+            <div className="absolute top-16 left-1/2 -translate-x-1/2 z-50
+                        bg-[#020203]/95 border border-white/10 backdrop-blur-md
+                        px-4 py-3 rounded-lg shadow-2xl min-w-[320px] max-w-lg max-h-[400px] overflow-y-auto
+                        animate-in fade-in-from-top-2 duration-200"
+              style={{ scrollbarWidth: 'thin', scrollbarColor: 'rgba(255,255,255,0.3) transparent', pointerEvents: 'none' }}>
 
-              {/* 事件摘要 */}
-              <span className="text-sm text-white/90 font-sans flex-1">
-                {activeZone.event_summary}
-              </span>
+              {/* Header: Total Change & Effect */}
+              <div className="flex items-center justify-between mb-3 border-b border-white/5 pb-2 sticky top-0 bg-[#020203]/95 z-10">
+                <div className="flex items-center gap-2">
+                  {(activeZone.impact || 0) > 0.7 && (
+                    <span className="text-lg animate-pulse" title="High Impact">✨</span>
+                  )}
+                  <span className={`text-xs px-2 py-0.5 rounded font-mono font-bold border ${(activeZone.avg_return || 0) >= 0
+                    ? 'bg-red-500/10 text-red-400 border-red-500/20'
+                    : 'bg-green-500/10 text-green-400 border-green-500/20'
+                    }`}>
+                    {((activeZone.avg_return || 0) >= 0 ? '+' : '')}
+                    {((activeZone.avg_return || 0) * 100).toFixed(1)}%
+                  </span>
+                  <span className="text-xs text-white/40 font-mono">
+                    {activeZone.startDate} ~ {activeZone.endDate}
+                  </span>
+                </div>
+              </div>
 
-              {/* 涨跌幅badge - A股红涨绿跌 */}
-              <span className={`text-xs px-2.5 py-1 rounded font-mono whitespace-nowrap font-semibold ${(activeZone.avg_return || 0) >= 0
-                ? 'bg-red-500/20 text-red-400 border border-red-500/30'  // 红涨
-                : 'bg-green-500/20 text-green-400 border border-green-500/30'  // 绿跌
-                }`}>
-                {((activeZone.avg_return || 0) >= 0 ? '+' : '')}
-                {((activeZone.avg_return || 0) * 100).toFixed(1)}%
-              </span>
+              <div className="space-y-4 pt-2">
+                <div className="text-[10px] text-white/40 uppercase tracking-widest font-bold flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-purple-400 animate-pulse"></span>
+                  Event Flow
+                </div>
+                <div className="relative pl-1">
+                  {/* Timeline Line */}
+                  <div className="absolute left-[3px] top-1 bottom-1 w-px bg-gradient-to-b from-white/20 via-white/10 to-transparent"></div>
+
+                  {activeZone.events.map((ev: any, idx: number) => (
+                    <div key={idx} className="relative pl-5 py-1 mb-2 group">
+                      {/* Timeline Dot */}
+                      <div className={`absolute left-0 top-2.5 w-[7px] h-[7px] rounded-full border border-black/50 transition-colors duration-300 ${(ev.avg_return || ((ev.endPrice - ev.startPrice) / ev.startPrice)) >= 0
+                        ? 'bg-red-400 group-hover:bg-red-300'
+                        : 'bg-green-400 group-hover:bg-green-300'
+                        }`}></div>
+
+                      {/* Content Card */}
+                      <div className="flex flex-col">
+                        <div className="flex items-center justify-between mb-0.5">
+                          <span className="text-[10px] text-gray-500 font-mono">{ev.startDate}</span>
+                          <span className={`text-[10px] font-bold font-mono px-1 rounded ${(ev.avg_return || ((ev.endPrice - ev.startPrice) / ev.startPrice)) >= 0
+                            ? 'text-red-400 bg-red-400/10'
+                            : 'text-green-400 bg-green-400/10'
+                            }`}>
+                            {((ev.avg_return !== undefined ? ev.avg_return : ((ev.endPrice - ev.startPrice) / ev.startPrice)) * 100).toFixed(1)}%
+                          </span>
+                        </div>
+                        <div className="text-xs text-gray-200 leading-snug font-medium group-hover:text-white transition-colors">
+                          {ev.summary || ev.event_summary || ev.type?.toUpperCase() || 'Event'}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
             </div>
+          )}
 
-            {/* 日期范围小字 */}
-            <div className="mt-1.5 text-xs text-white/40 font-mono">
-              {activeZone.startDate} ~ {activeZone.endDate}
-            </div>
-          </div>
-        )}
-
-        {/* 原有的简单悬浮提示（作为fallback） */}
-        {activeZone && !activeZone.event_summary && (
+        {/* 原有的简单悬浮提示（Raw Zone Tooltip OR Fallback for zones without events/anomalies） */}
+        {activeZone && (!activeZone.events || activeZone.events.length === 0) && (
           <motion.div
-            initial={{ opacity: 0, y: 10, scale: 0.95 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: 10, scale: 0.95 }}
-            transition={{ duration: 0.2 }}
-            className="absolute top-4 left-1/2 transform -translate-x-1/2 z-50"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.1 }}
+            className="absolute top-4 left-1/2 transform -translate-x-1/2 z-50" style={{ pointerEvents: 'none' }}
           >
             <div className="glass rounded-xl p-3 shadow-2xl max-w-md border border-white/10">
               <div className="flex items-center justify-between mb-2">
@@ -1647,7 +1875,7 @@ function InteractiveChart({ content }: { content: ChartContent }) {
                   <span className="text-gray-400 text-xs">{activeZone.startDate} - {activeZone.endDate}</span>
                 </div>
               </div>
-              <p className="text-gray-200 text-sm leading-relaxed">{activeZone.summary}</p>
+              <p className="text-gray-200 text-sm leading-relaxed">{activeZone.summary || activeZone.event_summary || '暂无描述'}</p>
             </div>
           </motion.div>
         )}

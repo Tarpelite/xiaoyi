@@ -415,11 +415,9 @@ class TrendService:
         if not segments:
             return []
 
+        # Initialize first merged segment with events list
         current_merge = segments[0]
-        # Normalize start/end dates to datetime for calculation if needed, but string is fine for equality check
-        # We need to maintain start/end prices.
-        # Merged segment: Start = first.Start, End = last.End
-        # StartPrice = first.StartPrice, EndPrice = last.EndPrice
+        current_merge["events"] = [copy.deepcopy(segments[0])]
 
         for i in range(1, len(segments)):
             next_seg = segments[i]
@@ -430,11 +428,13 @@ class TrendService:
                 # Merge
                 current_merge["endDate"] = next_seg["endDate"]
                 current_merge["endPrice"] = next_seg["endPrice"]
-                # Direction stays same
+                # Append to events
+                current_merge["events"].append(copy.deepcopy(next_seg))
             else:
                 # Commit current and start new
                 merged_segments.append(current_merge)
                 current_merge = next_seg
+                current_merge["events"] = [copy.deepcopy(next_seg)]
 
         merged_segments.append(current_merge)
 

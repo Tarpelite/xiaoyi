@@ -38,6 +38,11 @@ from app.agents import (
 
 # Data clients
 from app.data.rag_searcher import RAGSearcher
+import pandas as pd
+from app.services.trend_service import TrendService
+from app.services.stock_signal_service import StockSignalService
+from app.agents.event_summary_agent import EventSummaryAgent
+
 
 # Data & Models
 from app.data.fetcher import DataFetchError
@@ -512,9 +517,11 @@ class StreamingTaskProcessor:
         try:
             import pandas as pd
 
-            # from app.services.stock_signal_service import StockSignalService  # Deprecated
+            # from app.services.stock_signal_service import StockSignalService  # Re-enabled
             from app.services.trend_service import TrendService
-            from app.services.anomaly_service import AnomalyService
+            from app.services.stock_signal_service import StockSignalService
+
+            # from app.services.anomaly_service import AnomalyService # Deprecated
             from app.agents.event_summary_agent import EventSummaryAgent
 
             # 从 df 提取日期、收盘价、成交量
@@ -542,9 +549,7 @@ class StreamingTaskProcessor:
 
             # === Redis 全局缓存检查 ===
             redis_client = get_redis()
-            cache_key = (
-                f"stock_zones_v4:{stock_code}"  # Version 4: Added semantic_zones
-            )
+            cache_key = f"stock_zones_v5:{stock_code}"  # Version 5: Switched to StockSignalService
             cached_data_json = None
 
             try:
@@ -575,21 +580,6 @@ class StreamingTaskProcessor:
 
                 # Debug Prints for Trend Algorithms
                 print("\n" + "=" * 50)
-                print(
-                    f"📈 [ALGO 1/6] PELT (Exact Change Points): Found {len(trend_results.get('pelt', []))} segments"
-                )
-                for i, seg in enumerate(trend_results.get("pelt", [])[:3]):
-                    print(
-                        f"   - Segment {i + 1}: {seg['startDate']} to {seg['endDate']} ({seg['direction']})"
-                    )
-
-                print(
-                    f"\n📈 [ALGO 2/6] HMM (Market Regimes): Found {len(trend_results.get('hmm', []))} segments"
-                )
-                for i, seg in enumerate(trend_results.get("hmm", [])[:3]):
-                    print(
-                        f"   - Segment {i + 1}: {seg['startDate']} to {seg['endDate']} ({seg['type']})"
-                    )
 
                 print(
                     f"\n📈 [ALGO 3/6] Bottom-Up PLR (Trend Lines): Found {len(trend_results.get('plr', []))} segments"
@@ -602,15 +592,11 @@ class StreamingTaskProcessor:
 
                 # Map PLR segments to anomaly_zones format expected by frontend
                 plr_segments = trend_results.get("plr", [])
-                pelt_segments = trend_results.get("pelt", [])
-                hmm_segments = trend_results.get("hmm", [])
 
                 # Combine all segments for frontend selection
                 all_segments = []
                 # Re-enable all algorithms as user wants full data
                 all_segments.extend(plr_segments)
-                all_segments.extend(pelt_segments)
-                all_segments.extend(hmm_segments)
 
                 # NEW: Generate Semantic Broad Regimes (Merged PLR)
                 # This creates broad "Event Flow" phases
@@ -697,7 +683,10 @@ class StreamingTaskProcessor:
 
                 # Enhance summaries with RAG/News context if available
                 # Logic: Find news items falling within the segment's date range
+                # Enhance summaries with RAG/News context if available
+                # Logic: Find news items falling within the segment's date range
                 if summarized_news:
+                    # 1. Attach news to Raw Zones (anomaly_zones)
                     for zone in anomaly_zones:
                         try:
                             # Use pd from outer scope
@@ -714,58 +703,134 @@ class StreamingTaskProcessor:
                                     <= n_date
                                     <= (z_end + pd.Timedelta(days=3))
                                 ):
-                                    relevant_titles.append(news.title)
+                                    # Fix: Use summarized_title if available (SummarizedNewsItem)
+                                    title = getattr(
+                                        news,
+                                        "summarized_title",
+                                        getattr(news, "title", ""),
+                                    )
+                                    relevant_titles.append(title)
 
                             if relevant_titles:
-                                # Take top 1 most relevant title (or combine)
-                                # Simple heuristic: just take the distinct first one for now
-                                zone["summary"] = (
-                                    f"{relevant_titles[0]} ({zone['summary']})"
-                                )
+                                # Prioritize LLM summarized title for rich narrative
+                                zone["summary"] = relevant_titles[0]
                         except Exception as e:
                             print(f"[AnomalyZones] Error matching news to zone: {e}")
                             continue
 
+                    # 2. Attach news to Semantic Sub-Events (semantic_zones -> events)
+                    # This ensures the "Event Flow" tooltip has text!
+                    for s_zone in semantic_zones:
+                        for event in s_zone.get("events", []):
+                            # Strategy A: Match against ALREADY ENRICHED raw anomaly_zones
+                            # This is preferred because they might have "Title (Correction)" format
+                            found_match = False
+                            for raw in anomaly_zones:
+                                if (
+                                    raw["startDate"] == event["startDate"]
+                                    and raw["endDate"] == event["endDate"]
+                                ):
+                                    # Use event_summary if available (from Agent), else fallback to summary
+                                    event["summary"] = raw.get(
+                                        "event_summary", raw.get("summary", "")
+                                    )
+                                    found_match = True
+                                    break
+
+                            # Strategy B: Fallback to direct news search if no raw match found
+                            if not found_match:
+                                try:
+                                    z_start = pd.to_datetime(event["startDate"])
+                                    z_end = pd.to_datetime(event["endDate"])
+                                    relevant_titles = []
+                                    for news in summarized_news:
+                                        n_date = pd.to_datetime(news.published_date)
+                                        if (
+                                            (z_start - pd.Timedelta(days=2))
+                                            <= n_date
+                                            <= (z_end + pd.Timedelta(days=2))
+                                        ):
+                                            # Use LLM summarized title if available, else original
+                                            title = getattr(
+                                                news,
+                                                "summarized_title",
+                                                getattr(news, "title", ""),
+                                            )
+                                            relevant_titles.append(title)
+                                    if relevant_titles:
+                                        # Use the first relevant title
+                                        event["summary"] = relevant_titles[0]
+                                except Exception as e:
+                                    print(f"[SemanticEvent] Error attaching news: {e}")
+                                    pass
+
+                    # 3. Generate concatenated "Event Flow" summary for each semantic zone
+                    # This is what appears in the tooltip when hovering over a semantic zone
+                    for s_zone in semantic_zones:
+                        events = s_zone.get("events", [])
+                        if events:
+                            # Sort events by startDate to maintain chronological order
+                            sorted_events = sorted(
+                                events, key=lambda e: e.get("startDate", "")
+                            )
+                            # Concatenate summaries with arrow separator for flow
+                            event_summaries = [
+                                e.get("summary", "阶段性事件") for e in sorted_events
+                            ]
+                            s_zone["event_flow_summary"] = " → ".join(event_summaries)
+                            print(
+                                f"[SemanticZone] {s_zone['startDate']} - {s_zone['endDate']}: Event Flow = {s_zone['event_flow_summary']}"
+                            )
+                        else:
+                            # Fallback if no sub-events
+                            s_zone["event_flow_summary"] = s_zone.get(
+                                "summary", "语义合并区间"
+                            )
+
                 # 2. Anomaly Detection (Local Anomalies)
-                anomaly_service = AnomalyService()
-                anomaly_results = anomaly_service.detect_anomalies(sig_df, method="all")
+                # 2. Anomaly Detection (Significant Points via StockSignalService)
+                # Replaced old 3 algorithms (BCPD/STL/Matrix) with singular StockSignalService
+                signal_service = StockSignalService()
 
-                # Debug Prints for Anomaly Algorithms
-                print("\n" + "=" * 50)
-                print(
-                    f"🚨 [ALGO 4/6] BCPD (Bayesian Change Prob): Found {len(anomaly_results.get('bcpd', []))} points"
+                # Calculate significant points
+                # Returns list of {date, score, type, reason, is_pivot}
+                significant_points = signal_service.calculate_points(
+                    sig_df, news_counts, top_k=15
                 )
-                for i, p in enumerate(anomaly_results.get("bcpd", [])[:3]):
-                    print(
-                        f"   - Anomaly {i + 1}: {p['date']} (Score: {p['score']:.2f}) - {p['description']}"
-                    )
 
+                # Create price lookup map
+                price_map = pd.Series(sig_df.close.values, index=sig_df.date).to_dict()
+
+                anomalies = []
                 print(
-                    f"\n🚨 [ALGO 5/6] STL+CUSUM (Residual Drift): Found {len(anomaly_results.get('stl_cusum', []))} points"
+                    f"\n🚨 [Anomaly] StockSignalService found {len(significant_points)} points"
                 )
-                for i, p in enumerate(anomaly_results.get("stl_cusum", [])[:3]):
-                    print(
-                        f"   - Anomaly {i + 1}: {p['date']} (Score: {p['score']:.2f}) - {p['description']}"
-                    )
 
-                print(
-                    f"\n🚨 [ALGO 6/6] Matrix Profile (Shape Discord): Found {len(anomaly_results.get('matrix_profile', []))} points"
-                )
-                for i, p in enumerate(anomaly_results.get("matrix_profile", [])[:3]):
-                    print(
-                        f"   - Anomaly {i + 1}: {p['date']} (Score: {p['score']:.2f}) - {p['description']}"
-                    )
-                print("=" * 50 + "\n")
+                for pt in significant_points:
+                    pt_date = pt["date"]
+                    price = price_map.get(pt_date)
+                    if price is None:
+                        continue
 
-                # Combine all anomalies
-                all_anomalies = []
-                all_anomalies.extend(anomaly_results.get("bcpd", []))
-                all_anomalies.extend(anomaly_results.get("stl_cusum", []))
-                all_anomalies.extend(anomaly_results.get("matrix_profile", []))
+                    anomalies.append(
+                        {
+                            "method": "signal_service",  # Uniform method name
+                            "date": pt_date,
+                            "price": float(price),
+                            "score": pt["score"],
+                            "description": pt["reason"] or "Significant Event",
+                            "significance": pt.get(
+                                "type", "neutral"
+                            ),  # positive/negative
+                            "is_pivot": pt.get("is_pivot", False),
+                        }
+                    )
+                    print(
+                        f"   - Point: {pt_date} (Score: {pt['score']}) - {pt['reason']}"
+                    )
 
                 # Sort by date
-                all_anomalies.sort(key=lambda x: x["date"])
-                anomalies = all_anomalies
+                anomalies.sort(key=lambda x: x["date"])
 
                 # Validate anomaly data structure
                 valid_anomalies = []
@@ -803,8 +868,9 @@ class StreamingTaskProcessor:
                 )
 
             # 为每个区域生成事件摘要（仅当不是从缓存读取时）
-            # CHANGED: Generate summaries for SEMANTIC ZONES (Merged) instead of raw zones
-            if semantic_zones and not cached_data_json:
+            # FIXED: Generate summaries for RAW ZONES (anomaly_zones) instead of semantic zones
+            # Semantic zones will use concatenated summaries from their sub-events
+            if anomaly_zones and not cached_data_json:
                 try:
                     event_agent = EventSummaryAgent()
 
@@ -820,8 +886,8 @@ class StreamingTaskProcessor:
                         collection_name = os.getenv("MONGODB_COLLECTION", "stock_news")
                         news_collection = mongo_client[db_name][collection_name]
 
-                        # Process SEMANTIC zones for narrative
-                        for zone in semantic_zones:
+                        # Process RAW anomaly zones for individual event summaries
+                        for zone in anomaly_zones:
                             start = zone["startDate"]
                             end = zone["endDate"]
 
@@ -865,6 +931,9 @@ class StreamingTaskProcessor:
                             )
 
                             zone["event_summary"] = event_summary
+                            zone["summary"] = (
+                                event_summary  # Also set as summary for consistency
+                            )
                             print(
                                 f"[AnomalyZones] Zone {start}-{end} ({len(zone_news_dicts)} news): {event_summary}"
                             )
@@ -884,6 +953,7 @@ class StreamingTaskProcessor:
                             zone["event_summary"] = (
                                 f"价格变化{zone.get('avg_return', 0) * 100:+.1f}%"
                             )
+                            zone["summary"] = zone["event_summary"]
 
             # === 保存到Redis全局缓存 ===
             if not cached_data_json:
@@ -914,6 +984,14 @@ class StreamingTaskProcessor:
             if anomaly_zones:
                 message.save_anomaly_zones(anomaly_zones, stock_code)
 
+            # Save anomaly points (CRITICAL for frontend rendering on refresh)
+            if anomalies:
+                message.save_anomalies(anomalies)
+
+            # Save semantic zones (history) - CRITICAL for Event Flow tooltip persistence
+            if semantic_zones:
+                message.save_semantic_zones(semantic_zones)
+
             # Send combined data
             await self._emit_event(
                 event_queue,
@@ -934,7 +1012,7 @@ class StreamingTaskProcessor:
         except Exception as e:
             import traceback
 
-            print(f"[AnomalyZones] Error: {e}")
+            print(f"// console.log('[ChatArea]rror: {e}")
             print(f"[AnomalyZones] Traceback:\n{traceback.format_exc()}")
 
         await self._emit_event(
@@ -1188,6 +1266,110 @@ class StreamingTaskProcessor:
         )
         message.save_time_series_full(full_points, prediction_start)
 
+        # === NEW: Calculate Semantic Regimes for Prediction Data ===
+        prediction_semantic_zones = []
+        if forecast_result.points:
+            try:
+                # 1. Construct Prediction DataFrame
+                pred_df = pd.DataFrame(
+                    [
+                        {"date": p.date, "close": p.value, "volume": 1}
+                        for p in forecast_result.points
+                    ]
+                )
+
+                # 2. Re-instantiate TrendService (if needed) or use existing
+                # Note: trend_service was instantiated in Step 3 logic, might not be in scope if skipped
+                # Safest to instantiate distinct service for prediction
+                # from app.services.trend_service import TrendService (already imported)
+                pred_trend_service = TrendService()
+
+                # 3. Analyze Trend (PLR)
+                pred_results = pred_trend_service.analyze_trend(pred_df, method="plr")
+                pred_plr = pred_results.get("plr", [])
+
+                # 4. Process Semantic Regimes
+                # Use slightly relaxed duration for future (e.g. 5 days) as prediction is smoother?
+                # Or keep 7 days. Let's use 7 days.
+                pred_semantic_raw = pred_trend_service.process_semantic_regimes(
+                    pred_plr, min_duration_days=7
+                )
+
+                # 5. Format for Frontend
+                for seg in pred_semantic_raw:
+                    # Determine sentiment/color
+                    direction = seg.get("direction", "").lower()
+                    seg_type = seg.get("type", "").lower()
+
+                    sentiment = "neutral"
+                    if direction == "up" or seg_type == "bull":
+                        sentiment = "positive"
+                    elif direction == "down" or seg_type == "bear":
+                        sentiment = "negative"
+
+                    start_p = float(seg.get("startPrice", 0))
+                    end_p = float(seg.get("endPrice", 0))
+                    change_pct = (end_p - start_p) / start_p if start_p else 0
+
+                    prediction_semantic_zones.append(
+                        {
+                            "startDate": seg["startDate"],
+                            "endDate": seg["endDate"],
+                            "avg_return": change_pct,
+                            "zone_type": "prediction_semantic_regime",
+                            "method": "plr_merged_prediction",
+                            "sentiment": sentiment,
+                            "summary": f"Predicted {seg.get('direction', 'Trend').title()} ({change_pct * 100:.1f}%)",
+                            "description": f"Predicted phase from {seg['startDate']} to {seg['endDate']}",
+                            "type": seg_type,
+                            "displayType": direction
+                            or seg_type,  # For frontend coloring
+                            "normalizedType": direction or seg_type,
+                            "direction": direction,
+                            "events": [],  # No real events for future yet
+                            "isPrediction": True,  # Flag for frontend if needed
+                        }
+                    )
+
+                print(
+                    f"[PredictionZones] Generated {len(prediction_semantic_zones)} semantic zones for prediction data."
+                )
+
+            except Exception as e:
+                print(f"[PredictionZones] Error generating prediction regimes: {e}")
+                prediction_semantic_zones = []
+
+        # Prepare data for time_series_full event
+        # Retrieve current message state safely
+        current_msg_data = message.get()
+        saved_anomalies = current_msg_data.anomalies if current_msg_data else []
+        saved_semantic_zones = (
+            current_msg_data.semantic_zones if current_msg_data else []
+        )
+        saved_anomaly_zones = current_msg_data.anomaly_zones if current_msg_data else []
+
+        # Resolve final variables to ensure data integrity
+        final_anomalies = anomalies if "anomalies" in locals() else saved_anomalies
+        final_semantic_zones = (
+            semantic_zones if "semantic_zones" in locals() else saved_semantic_zones
+        )
+        final_stock_zones = (
+            anomaly_zones if "anomaly_zones" in locals() else saved_anomaly_zones
+        )
+
+        # Debugging Output
+        print(f"================[ TimeSeriesFull Debug Start ]================")
+        print(f"Anomalies in locals: {'anomalies' in locals()}")
+        print(f"Anomalies count (Final): {len(final_anomalies)}")
+        if len(final_anomalies) > 0:
+            print(f"Sample Anomaly: {final_anomalies[0]}")
+
+        print(f"SemanticZones count (Final): {len(final_semantic_zones)}")
+        print(f"PredictionZones count: {len(prediction_semantic_zones)}")
+        if len(prediction_semantic_zones) > 0:
+            print(f"Sample PredictionZone: {prediction_semantic_zones[0]}")
+        print(f"================[ TimeSeriesFull Debug End ]==================")
+
         await self._emit_event(
             event_queue,
             message,
@@ -1196,6 +1378,10 @@ class StreamingTaskProcessor:
                 "data_type": "time_series_full",
                 "data": [p.model_dump() for p in full_points],
                 "prediction_start_day": prediction_start,
+                "prediction_semantic_zones": prediction_semantic_zones,
+                "anomalies": final_anomalies,
+                "semantic_zones": final_semantic_zones,
+                "stock_zones": final_stock_zones,
             },
         )
 
@@ -1206,6 +1392,22 @@ class StreamingTaskProcessor:
         metrics_info = f"MAE: {metrics.mae}" + (
             f", RMSE: {metrics.rmse}" if metrics.rmse else ""
         )
+
+        # ------------------------------------------------------------------
+        # CRITICAL FIX: Atomic Persistence of Analysis Data
+        # ------------------------------------------------------------------
+        # Before completing the step, we MUST save all generated data (zones, anomalies, time series).
+        # We use the new atomic method to prevent partial overwrites.
+        message.save_analysis_result(
+            time_series_full=full_points,
+            prediction_start=prediction_start,
+            semantic_zones=final_semantic_zones,
+            prediction_zones=prediction_semantic_zones,
+            anomalies=final_anomalies,
+            anomaly_zones=final_stock_zones,
+            ticker=stock_code,
+        )
+
         await self._emit_event(
             event_queue,
             message,
