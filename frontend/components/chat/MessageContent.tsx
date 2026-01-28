@@ -4,7 +4,7 @@ import { useState, useMemo, useRef, useCallback, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { LineChart, Line, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, ReferenceLine, ReferenceArea } from 'recharts'
+import { LineChart, Line, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, ReferenceLine, ReferenceArea, ReferenceDot, Label } from 'recharts'
 import { RotateCcw, Move } from 'lucide-react'
 import type { TextContent, ChartContent, TableContent, StockContent } from './ChatArea'
 import { useBacktestSimulation } from '@/hooks/useBacktestSimulation'
@@ -37,6 +37,27 @@ function preprocessMarkdown(text: string): string {
 
 
 
+
+// AlgoSelect Component
+const AlgoSelect: React.FC<{ label: string; value: string; options: { label: string; value: string }[]; onChange: (v: string) => void }> = ({ label, value, options, onChange }) => (
+  <div className="flex items-center gap-2 bg-gray-800/80 px-3 py-1.5 rounded-lg border border-gray-700 shadow-sm transition-colors hover:border-violet-500/50">
+    <span className="text-xs text-gray-400 font-medium whitespace-nowrap">{label}</span>
+    <div className="relative">
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="bg-transparent text-xs text-gray-200 outline-none appearance-none pr-6 cursor-pointer font-medium hover:text-violet-400 transition-colors w-full"
+      >
+        {options.map(opt => <option key={opt.value} value={opt.value} className="bg-gray-800 text-gray-300">{opt.label}</option>)}
+      </select>
+      <div className="absolute right-0 top-1/2 -translate-y-1/2 pointer-events-none text-gray-500">
+        <svg width="10" height="6" viewBox="0 0 10 6" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M1 1L5 5L9 1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </div>
+    </div>
+  </div>
+);
 
 export function MessageContent({ content }: MessageContentProps) {
   if (content.type === 'text') {
@@ -272,7 +293,7 @@ export function MessageContent({ content }: MessageContentProps) {
 
 // 交互式图表组件，支持鼠标拖拽平移、滚轮缩放、异常区高亮、新闻侧边栏
 function InteractiveChart({ content }: { content: ChartContent }) {
-  const { title, data, chartType = 'line', sessionId, messageId, originalData, anomalyZones = [], ticker } = content
+  const { title, data, chartType = 'line', sessionId, messageId, originalData, anomalyZones = [], ticker, anomalies = [] } = content
 
   // 新闻侧边栏状态
   const [newsSidebarOpen, setNewsSidebarOpen] = useState(false)
@@ -282,6 +303,10 @@ function InteractiveChart({ content }: { content: ChartContent }) {
 
   // 异常区悬浮状态
   const [activeZone, setActiveZone] = useState<any>(null)
+
+  // Algorithm Selection State - Default to 'plr'
+  const [trendAlgo, setTrendAlgo] = useState<string>('plr');
+  const [anomalyAlgo, setAnomalyAlgo] = useState<string>('all');
 
   // 从URL恢复新闻侧栏状态（仅在ticker可用时）
   useEffect(() => {
@@ -486,6 +511,24 @@ function InteractiveChart({ content }: { content: ChartContent }) {
       })
     }
   }, [anomalyZones, chartData, viewStartIndex, viewEndIndex])
+
+  // Debug: Log anomaly data when received
+  useEffect(() => {
+    if (anomalies && anomalies.length > 0) {
+      console.log(`[Anomaly Rendering] Received ${anomalies.length} anomalies:`, anomalies);
+      console.log('[Anomaly Rendering] Chart Y-axis domain:', yAxisDomain);
+      console.log('[Anomaly Rendering] Chart date range:', chartData[0]?.name, 'to', chartData[chartData.length - 1]?.name);
+
+      // Check which anomalies are in valid date range
+      const chartDates = new Set(chartData.map(d => d.name));
+      anomalies.forEach((anom: any, idx: number) => {
+        const inDateRange = chartDates.has(anom.date);
+        const inYRange = anom.price >= yAxisDomain[0] && anom.price <= yAxisDomain[1];
+        console.log(`[Anomaly ${idx}] ${anom.method} at ${anom.date}: price=${anom.price}, inDateRange=${inDateRange}, inYRange=${inYRange}`);
+      });
+    }
+  }, [anomalies, chartData, yAxisDomain]);
+
 
   // 检查是否处于缩放状态
   const isZoomed = (viewEndIndex - viewStartIndex + 1) < chartData.length
@@ -714,6 +757,20 @@ function InteractiveChart({ content }: { content: ChartContent }) {
     setViewEndIndex(chartData.length - 1)
   }, [chartData.length])
 
+  // Filter Logic
+  // @ts-ignore
+  const visibleZones = (anomalyZones || []).filter((z: any) => {
+    if (trendAlgo === 'all') return true;
+    return (z.method || 'plr') === trendAlgo;
+  });
+
+  // Filter Anomalies
+  // @ts-ignore
+  const visibleAnomalies = (anomalies || []).filter((a: any) => {
+    if (anomalyAlgo === 'all') return true;
+    return (a.method || 'bcpd') === anomalyAlgo;
+  });
+
   // 如果标题包含"预测"，则不显示（因为外层已有"价格走势分析"标题）
   const shouldShowTitle = title && !title.includes('预测')
 
@@ -732,6 +789,29 @@ function InteractiveChart({ content }: { content: ChartContent }) {
           <h4 className="text-sm font-medium text-gray-300">{title}</h4>
         )}
         <div className="flex items-center gap-2">
+          <AlgoSelect
+            label="趋势"
+            value={trendAlgo}
+            onChange={setTrendAlgo}
+            options={[
+              { label: '分段线性', value: 'plr' },
+              { label: '市场状态', value: 'hmm' },
+              { label: '突变点', value: 'pelt' },
+              { label: '全部', value: 'all' }
+            ]}
+          />
+          <AlgoSelect
+            label="异常"
+            value={anomalyAlgo}
+            onChange={setAnomalyAlgo}
+            options={[
+              { label: '全部', value: 'all' },
+              { label: 'BCPD', value: 'bcpd' },
+              { label: 'STL', value: 'stl_cusum' },
+              { label: 'Matrix', value: 'matrix_profile' }
+            ]}
+          />
+          <div className="h-4 w-px bg-white/10 mx-1"></div>
           {isZoomed && (
             <>
               <button
@@ -756,10 +836,9 @@ function InteractiveChart({ content }: { content: ChartContent }) {
           )}
         </div>
       </div>
-      {/* Zone计数器 - debug */}
-      {anomalyZones && anomalyZones.length > 0 && (
+      {visibleZones && visibleZones.length > 0 && (
         <div className="absolute top-2 right-2 bg-black/70 px-2 py-1 rounded text-xs text-white/70 z-10">
-          {anomalyZones.length} 个重点区域
+          {visibleZones.length} 个重点区域
         </div>
       )}
       <div
@@ -824,7 +903,7 @@ function InteractiveChart({ content }: { content: ChartContent }) {
               wrapperStyle={{ fontSize: '12px' }}
             />
             {/* 异常区域与悬浮提示 - Bloomberg风格 */}
-            {anomalyZones && anomalyZones.map((zone: any, idx: number) => {
+            {visibleZones.map((zone: any, idx: number) => {
               // A股配色：红涨绿跌
               const isPositive = (zone.avg_return || 0) >= 0
               const zoneColor = isPositive
@@ -863,6 +942,52 @@ function InteractiveChart({ content }: { content: ChartContent }) {
                 />
               )
             })}
+
+            {/* 异常点 - ReferenceDot */}
+            {visibleAnomalies.map((anomaly: any, idx: number) => {
+              // Validate anomaly has required fields
+              if (!anomaly.date || anomaly.price === undefined) {
+                console.warn(`[Anomaly Rendering] Skipping anomaly ${idx}: missing date or price`, anomaly);
+                return null;
+              }
+
+              // Check if date exists in FULL chartData (not just displayData which is zoom-filtered)
+              const dateExists = chartData.some(d => d.name === anomaly.date);
+              if (!dateExists) {
+                // Date not in dataset at all (weekends or missing data)
+                return null;
+              }
+
+              // Determine color based on algorithm type
+              const colorMap: Record<string, string> = {
+                'bcpd': '#F59E0B',        // Amber for BCPD
+                'stl_cusum': '#EF4444',   // Red for STL+CUSUM
+                'matrix_profile': '#8B5CF6' // Purple for Matrix Profile
+              };
+              const dotColor = colorMap[anomaly.method] || '#F59E0B';
+
+              return (
+                <ReferenceDot
+                  key={`anomaly-${anomaly.method}-${idx}`}
+                  x={anomaly.date}
+                  y={anomaly.price}
+                  r={6}
+                  fill={dotColor}
+                  stroke="#fff"
+                  strokeWidth={2}
+                  className="cursor-pointer hover:r-8 transition-all"
+                >
+                  <Label
+                    value="!"
+                    position="center"
+                    fill="#fff"
+                    fontSize={10}
+                    fontWeight="bold"
+                  />
+                </ReferenceDot>
+              );
+            })}
+
             {/* 鼠标跟随的水平参考线 */}
             {mouseY !== null && plotAreaBounds && (() => {
               // mouseY 已经是相对于绘图区域顶部的坐标

@@ -36,12 +36,14 @@ def get_stocks_from_akshare() -> List[Dict]:
         else:
             market = "SZ"
 
-        stocks.append({
-            "stock_code": code,
-            "stock_name": name,
-            "market": market,
-            "status": "listed"
-        })
+        stocks.append(
+            {
+                "stock_code": code,
+                "stock_name": name,
+                "market": market,
+                "status": "listed",
+            }
+        )
 
     print(f"[Upload] 获取了 {len(stocks)} 只股票")
     return stocks
@@ -50,10 +52,10 @@ def get_stocks_from_akshare() -> List[Dict]:
 def upload_stock_to_rag(stock: Dict, client: httpx.Client) -> bool:
     """上传单个股票到 RAG 服务"""
     # 构建文档内容 - 只用官方名称，不需要别名
-    content = f"""股票名称: {stock['stock_name']}
-股票代码: {stock['stock_code']}
-市场: {stock['market']}
-状态: {stock['status']}
+    content = f"""股票名称: {stock["stock_name"]}
+股票代码: {stock["stock_code"]}
+市场: {stock["market"]}
+状态: {stock["status"]}
 """
 
     try:
@@ -62,26 +64,25 @@ def upload_stock_to_rag(stock: Dict, client: httpx.Client) -> bool:
             "file": (
                 f"stock_{stock['stock_code']}.txt",
                 content.encode("utf-8"),
-                "text/plain"
+                "text/plain",
             )
         }
 
         # 元数据
         data = {
             "title": f"{stock['stock_name']} ({stock['stock_code']})",
-            "metadata": str({
-                "type": "stock_info",
-                "stock_code": stock["stock_code"],
-                "stock_name": stock["stock_name"],
-                "market": stock["market"]
-            })
+            "metadata": str(
+                {
+                    "type": "stock_info",
+                    "stock_code": stock["stock_code"],
+                    "stock_name": stock["stock_name"],
+                    "market": stock["market"],
+                }
+            ),
         }
 
         response = client.post(
-            f"{RAG_SERVICE_URL}/api/v1/documents",
-            files=files,
-            data=data,
-            timeout=30.0
+            f"{RAG_SERVICE_URL}/api/v1/documents", files=files, data=data, timeout=30.0
         )
         response.raise_for_status()
         return True
@@ -107,7 +108,9 @@ def upload_stocks_batch(stocks: List[Dict], batch_size: int = 100):
 
             # 进度显示
             if (i + 1) % batch_size == 0:
-                print(f"[Upload] 进度: {i + 1}/{len(stocks)}, 成功: {success_count}, 失败: {fail_count}")
+                print(
+                    f"[Upload] 进度: {i + 1}/{len(stocks)}, 成功: {success_count}, 失败: {fail_count}"
+                )
 
     print(f"[Upload] 完成! 成功: {success_count}, 失败: {fail_count}")
 

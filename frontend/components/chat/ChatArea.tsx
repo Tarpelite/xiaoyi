@@ -52,6 +52,14 @@ export interface ChartContent {
     endDate: string
     summary: string
     sentiment: 'positive' | 'negative' | 'neutral'
+    method?: string
+  }>
+  anomalies?: Array<{
+    date: string
+    price: number
+    score: number
+    description: string
+    method: string
   }>
   ticker?: string  // 股票代码，用于获取新闻
 }
@@ -257,6 +265,7 @@ export function ChatArea({ sessionId: externalSessionId, onSessionCreated }: Cha
     let accumulatedNews: NewsItem[] = []
     let accumulatedEmotion: { score: number; description: string } | null = null
     let accumulatedAnomalyZones: any[] = []  // 异常区域
+    let accumulatedAnomalies: any[] = []     // 异常点
     let stockTicker = ''  // 股票代码
     let predictionStartDay = ''
 
@@ -289,6 +298,10 @@ export function ChatArea({ sessionId: externalSessionId, onSessionCreated }: Cha
           } else {
             console.log('[ChatArea] Resume - NO anomaly_zones in currentData')
           }
+          if (currentData.anomalies && currentData.anomalies.length > 0) {
+            accumulatedAnomalies = currentData.anomalies;
+            console.log('[ChatArea] Resume - extracted anomalies:', accumulatedAnomalies.length);
+          }
           predictionStartDay = currentData.prediction_start_day || ''
 
           console.log('[ChatArea] Resume - Data Summary:')
@@ -310,7 +323,8 @@ export function ChatArea({ sessionId: externalSessionId, onSessionCreated }: Cha
             backendSessionId,
             backendMessageId,
             accumulatedAnomalyZones,
-            stockTicker
+            stockTicker,
+            accumulatedAnomalies
           )
         }
       },
@@ -399,12 +413,16 @@ export function ChatArea({ sessionId: externalSessionId, onSessionCreated }: Cha
           updateContentsFromStreamData(assistantMessageId, accumulatedTimeSeriesOriginal, accumulatedTimeSeriesFull.length > 0 ? accumulatedTimeSeriesFull : null, accumulatedNews, accumulatedEmotion, null, predictionStartDay, backendSessionId, backendMessageId, accumulatedAnomalyZones, stockTicker)
         } else if (dataType === 'anomaly_zones') {
           console.log('[ChatArea] Received anomaly_zones:', data)
-          const zonesData = data as { zones: any[]; ticker: string }
+          const zonesData = data as { zones: any[]; ticker: string; anomalies?: any[] }
           accumulatedAnomalyZones = zonesData.zones || []
+          accumulatedAnomalies = zonesData.anomalies || []
           stockTicker = zonesData.ticker || ''
-          console.log('[ChatArea] Extracted - zones:', accumulatedAnomalyZones.length, 'ticker:', stockTicker)
+          console.log('[ChatArea] Extracted - zones:', accumulatedAnomalyZones.length, 'ticker:', stockTicker, 'anomalies:', accumulatedAnomalies.length)
           // 异常区数据收到后立即更新图表
-          updateContentsFromStreamData(assistantMessageId, accumulatedTimeSeriesOriginal, accumulatedTimeSeriesFull.length > 0 ? accumulatedTimeSeriesFull : null, accumulatedNews, accumulatedEmotion, null, predictionStartDay, backendSessionId, backendMessageId, accumulatedAnomalyZones, stockTicker)
+          updateContentsFromStreamData(assistantMessageId, accumulatedTimeSeriesOriginal, accumulatedTimeSeriesFull.length > 0 ? accumulatedTimeSeriesFull : null, accumulatedNews, accumulatedEmotion, null, predictionStartDay, backendSessionId, backendMessageId, accumulatedAnomalyZones, stockTicker, accumulatedAnomalies)
+        } else if (dataType === 'anomalies') {
+          accumulatedAnomalies = data as any[];
+          updateContentsFromStreamData(assistantMessageId, accumulatedTimeSeriesOriginal, accumulatedTimeSeriesFull.length > 0 ? accumulatedTimeSeriesFull : null, accumulatedNews, accumulatedEmotion, null, predictionStartDay, backendSessionId, backendMessageId, accumulatedAnomalyZones, stockTicker, accumulatedAnomalies)
         }
       },
 
@@ -714,13 +732,20 @@ export function ChatArea({ sessionId: externalSessionId, onSessionCreated }: Cha
       conversational_response?: string
       session_id?: string
       message_id?: string
-      anomaly_zones?: Array<{
+      anomalyZones?: Array<{
         startDate: string
         endDate: string
         summary: string
         sentiment: 'positive' | 'negative' | 'neutral'
       }>
       anomaly_zones_ticker?: string | null
+      anomalies?: Array<{
+        date: string
+        price: number
+        score: number
+        description: string
+        method: string
+      }>
     },
     currentStep: number = 0,
     status: string = 'pending'
@@ -1011,7 +1036,8 @@ export function ChatArea({ sessionId: externalSessionId, onSessionCreated }: Cha
     backendSessionId?: string,  // 用于回测功能
     backendMessageId?: string,   // 用于回测功能
     anomalyZones?: any[],  // 异常区域
-    ticker?: string  // 股票代码
+    ticker?: string,  // 股票代码
+    anomalies?: any[] // 异常点
   ) => {
     setMessages((prev: Message[]) => prev.map((msg: Message) => {
       if (msg.id !== messageId) return msg

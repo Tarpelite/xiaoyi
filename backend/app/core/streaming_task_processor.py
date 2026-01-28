@@ -498,6 +498,10 @@ class StreamingTaskProcessor:
                 },
             )
 
+        # [DEBUG] Check flow
+        print(
+            f"[DEBUG] _execute_forecast_streaming: rag_sources count={len(rag_sources) if rag_sources else 0}"
+        )
         if rag_sources:
             message.save_rag_sources(rag_sources)
 
@@ -507,7 +511,10 @@ class StreamingTaskProcessor:
         )
         try:
             import pandas as pd
-            from app.services.stock_signal_service import StockSignalService
+
+            # from app.services.stock_signal_service import StockSignalService  # Deprecated
+            from app.services.trend_service import TrendService
+            from app.services.anomaly_service import AnomalyService
             from app.agents.event_summary_agent import EventSummaryAgent
 
             # 从 df 提取日期、收盘价、成交量
@@ -535,34 +542,217 @@ class StreamingTaskProcessor:
 
             # === Redis 全局缓存检查 ===
             redis_client = get_redis()
-            cache_key = f"stock_zones:{stock_code}"
-            cached_zones_json = None
+            cache_key = f"stock_zones_v2:{stock_code}"  # Version 2 cache for new algos
+            cached_data_json = None
 
             try:
-                cached_zones_json = redis_client.get(cache_key)
-                if cached_zones_json:
+                cached_data_json = redis_client.get(cache_key)
+                if cached_data_json:
                     import json
 
-                    anomaly_zones = json.loads(cached_zones_json)
+                    cached_data = json.loads(cached_data_json)
+                    anomaly_zones = cached_data.get("zones", [])
+                    anomalies = cached_data.get("anomalies", [])
                     print(
                         f"[AnomalyZones] ✓ Using Redis cached {len(anomaly_zones)} zones for {stock_code}"
                     )
             except Exception as e:
                 print(f"[AnomalyZones] Redis cache read error: {e}")
-                cached_zones_json = None
+                cached_data_json = None
+                anomaly_zones = []
+                anomalies = []
 
             # 如果缓存不存在，计算并保存
-            if not cached_zones_json:
-                # 使用动态聚类服务 (Merged into StockSignalService)
-                clustering_service = StockSignalService(lookback=60, max_zone_days=10)
-                anomaly_zones = clustering_service.generate_zones(sig_df, news_counts)
+            if not cached_data_json:
+                # 1. Trend Analysis (Regime Segmentation)
+                trend_service = TrendService()
+                # Use all methods but prefer PLR for visual zones
+                trend_results = trend_service.analyze_trend(sig_df, method="all")
+
+                # Debug Prints for Trend Algorithms
+                print("\n" + "=" * 50)
+                print(
+                    f"📈 [ALGO 1/6] PELT (Exact Change Points): Found {len(trend_results.get('pelt', []))} segments"
+                )
+                for i, seg in enumerate(trend_results.get("pelt", [])[:3]):
+                    print(
+                        f"   - Segment {i + 1}: {seg['startDate']} to {seg['endDate']} ({seg['direction']})"
+                    )
 
                 print(
-                    f"[AnomalyZones] ⚙️ Generated {len(anomaly_zones)} zones: {[z['zone_type'] for z in anomaly_zones]}"
+                    f"\n📈 [ALGO 2/6] HMM (Market Regimes): Found {len(trend_results.get('hmm', []))} segments"
+                )
+                for i, seg in enumerate(trend_results.get("hmm", [])[:3]):
+                    print(
+                        f"   - Segment {i + 1}: {seg['startDate']} to {seg['endDate']} ({seg['type']})"
+                    )
+
+                print(
+                    f"\n📈 [ALGO 3/6] Bottom-Up PLR (Trend Lines): Found {len(trend_results.get('plr', []))} segments"
+                )
+                for i, seg in enumerate(trend_results.get("plr", [])[:3]):
+                    print(
+                        f"   - Segment {i + 1}: {seg['startDate']} to {seg['endDate']} ({seg['direction']})"
+                    )
+                print("=" * 50 + "\n")
+
+                # Map PLR segments to anomaly_zones format expected by frontend
+                plr_segments = trend_results.get("plr", [])
+                pelt_segments = trend_results.get("pelt", [])
+                hmm_segments = trend_results.get("hmm", [])
+
+                # Combine all segments for frontend selection
+                all_segments = []
+                # Re-enable all algorithms as user wants full data
+                all_segments.extend(plr_segments)
+                all_segments.extend(pelt_segments)
+                all_segments.extend(hmm_segments)
+
+                anomaly_zones = []
+                for seg in all_segments:
+                    # Determine sentiment/color
+                    sentiment = "neutral"
+                    direction = seg.get("direction", "").lower()
+                    seg_type = seg.get("type", "").lower()  # HMM uses type
+
+                    if direction == "up" or seg_type == "bull":
+                        sentiment = "positive"
+                    elif direction == "down" or seg_type == "bear":
+                        sentiment = "negative"
+
+                    # Calculate simple impact/score
+                    # HMM segments might have avgPrice, change based on start/end
+                    # Ensure keys exist
+                    start_p = seg.get("startPrice", seg.get("avgPrice", 1.0))
+                    end_p = seg.get("endPrice", seg.get("avgPrice", 1.0))
+
+                    change_pct = (end_p - start_p) / start_p if start_p else 0
+
+                    anomaly_zones.append(
+                        {
+                            "startDate": seg["startDate"],
+                            "endDate": seg["endDate"],
+                            "avg_return": change_pct,
+                            "avg_score": abs(change_pct) * 10,  # Mock score
+                            "zone_type": "trend_segment",  # New type
+                            "method": seg.get(
+                                "method", "plr"
+                            ),  # Default to plr if missing
+                            "sentiment": sentiment,  # Explicit sentiment for frontend
+                            "summary": f"{seg.get('direction', seg.get('type', 'Trend')).title()} ({change_pct * 100:.1f}%)",  # Used as fallback title
+                            "description": f"Trend detected from {seg['startDate']} to {seg['endDate']}. Return: {change_pct * 100:.1f}%",  # Detail text
+                        }
+                    )
+
+                # Enhance summaries with RAG/News context if available
+                # Logic: Find news items falling within the segment's date range
+                if summarized_news:
+                    for zone in anomaly_zones:
+                        try:
+                            # Use pd from outer scope
+                            z_start = pd.to_datetime(zone["startDate"])
+                            z_end = pd.to_datetime(zone["endDate"])
+
+                            relevant_titles = []
+                            for news in summarized_news:
+                                # summarized_news items have 'published_date' field
+                                n_date = pd.to_datetime(news.published_date)
+                                # Check if news falls within the zone or close to it (within 3 days padding to catch lead/lag)
+                                if (
+                                    (z_start - pd.Timedelta(days=3))
+                                    <= n_date
+                                    <= (z_end + pd.Timedelta(days=3))
+                                ):
+                                    relevant_titles.append(news.title)
+
+                            if relevant_titles:
+                                # Take top 1 most relevant title (or combine)
+                                # Simple heuristic: just take the distinct first one for now
+                                zone["summary"] = (
+                                    f"{relevant_titles[0]} ({zone['summary']})"
+                                )
+                        except Exception as e:
+                            print(f"[AnomalyZones] Error matching news to zone: {e}")
+                            continue
+
+                # 2. Anomaly Detection (Local Anomalies)
+                anomaly_service = AnomalyService()
+                anomaly_results = anomaly_service.detect_anomalies(sig_df, method="all")
+
+                # Debug Prints for Anomaly Algorithms
+                print("\n" + "=" * 50)
+                print(
+                    f"🚨 [ALGO 4/6] BCPD (Bayesian Change Prob): Found {len(anomaly_results.get('bcpd', []))} points"
+                )
+                for i, p in enumerate(anomaly_results.get("bcpd", [])[:3]):
+                    print(
+                        f"   - Anomaly {i + 1}: {p['date']} (Score: {p['score']:.2f}) - {p['description']}"
+                    )
+
+                print(
+                    f"\n🚨 [ALGO 5/6] STL+CUSUM (Residual Drift): Found {len(anomaly_results.get('stl_cusum', []))} points"
+                )
+                for i, p in enumerate(anomaly_results.get("stl_cusum", [])[:3]):
+                    print(
+                        f"   - Anomaly {i + 1}: {p['date']} (Score: {p['score']:.2f}) - {p['description']}"
+                    )
+
+                print(
+                    f"\n🚨 [ALGO 6/6] Matrix Profile (Shape Discord): Found {len(anomaly_results.get('matrix_profile', []))} points"
+                )
+                for i, p in enumerate(anomaly_results.get("matrix_profile", [])[:3]):
+                    print(
+                        f"   - Anomaly {i + 1}: {p['date']} (Score: {p['score']:.2f}) - {p['description']}"
+                    )
+                print("=" * 50 + "\n")
+
+                # Combine all anomalies
+                all_anomalies = []
+                all_anomalies.extend(anomaly_results.get("bcpd", []))
+                all_anomalies.extend(anomaly_results.get("stl_cusum", []))
+                all_anomalies.extend(anomaly_results.get("matrix_profile", []))
+
+                # Sort by date
+                all_anomalies.sort(key=lambda x: x["date"])
+                anomalies = all_anomalies
+
+                # Validate anomaly data structure
+                valid_anomalies = []
+                for anom in anomalies:
+                    # Ensure all required fields exist
+                    if all(
+                        key in anom
+                        for key in ["method", "date", "price", "score", "description"]
+                    ):
+                        # Ensure date format is YYYY-MM-DD
+                        if (
+                            len(anom["date"]) == 10
+                            and anom["date"][4] == "-"
+                            and anom["date"][7] == "-"
+                        ):
+                            valid_anomalies.append(anom)
+                        else:
+                            print(
+                                f"[AnomalyZones] ⚠️ Invalid date format for anomaly: {anom['date']}"
+                            )
+                    else:
+                        missing = [
+                            k
+                            for k in ["method", "date", "price", "score", "description"]
+                            if k not in anom
+                        ]
+                        print(
+                            f"[AnomalyZones] ⚠️ Anomaly missing required fields: {missing}"
+                        )
+
+                anomalies = valid_anomalies
+
+                print(
+                    f"[AnomalyZones] ⚙️ Generated {len(anomaly_zones)} zones and {len(anomalies)} valid anomalies"
                 )
 
             # 为每个区域生成事件摘要（仅当不是从缓存读取时）
-            if anomaly_zones and not cached_zones_json:
+            if anomaly_zones and not cached_data_json:
                 try:
                     event_agent = EventSummaryAgent()
 
@@ -617,7 +807,7 @@ class StreamingTaskProcessor:
                             # 使用Agent生成摘要
                             event_summary = event_agent.summarize_zone(
                                 zone_dates=zone_dates,
-                                price_change=zone["avg_return"] * 100,
+                                price_change=zone.get("avg_return", 0) * 100,
                                 news_items=zone_news_dicts,
                             )
 
@@ -642,58 +832,46 @@ class StreamingTaskProcessor:
                                 f"价格变化{zone.get('avg_return', 0) * 100:+.1f}%"
                             )
 
-            # 过滤掉没有新闻的zones（仅当不是从缓存读取时）
-            if not cached_zones_json:
-                anomaly_zones_with_news = []
-                for zone in anomaly_zones:
-                    # 检查是否有新闻（通过event_summary判断，包含"股价"说明没有新闻）
-                    if (
-                        zone.get("event_summary")
-                        and not zone["event_summary"].startswith("股价")
-                        and not zone["event_summary"].startswith("价格")
-                    ):
-                        anomaly_zones_with_news.append(zone)
-                    else:
-                        print(
-                            f"[AnomalyZones] Filtered out zone {zone['startDate']}-{zone['endDate']} (no news)"
-                        )
+            # === 保存到Redis全局缓存 ===
+            if not cached_data_json:
+                try:
+                    import json
 
-                anomaly_zones = anomaly_zones_with_news
-                print(
-                    f"[AnomalyZones] After filtering: {len(anomaly_zones)} zones with news"
-                )
+                    cache_data = {"zones": anomaly_zones, "anomalies": anomalies}
 
-                # === 保存到Redis全局缓存 ===
-                if anomaly_zones:
-                    try:
-                        import json
-
-                        zones_json = json.dumps(anomaly_zones, ensure_ascii=False)
-                        redis_client.setex(
-                            cache_key,
-                            12 * 60 * 60,  # 12小时TTL
-                            zones_json,
-                        )
-                        print(
-                            f"[AnomalyZones] 💾 Saved {len(anomaly_zones)} zones to Redis cache (12 hours)"
-                        )
-                    except Exception as e:
-                        print(f"[AnomalyZones] Redis cache save error: {e}")
+                    zones_json = json.dumps(cache_data, ensure_ascii=False)
+                    redis_client.setex(
+                        cache_key,
+                        12 * 60 * 60,  # 12小时TTL
+                        zones_json,
+                    )
+                    print(
+                        f"[AnomalyZones] 💾 Saved {len(anomaly_zones)} zones and {len(anomalies)} anomalies to Redis cache (12 hours)"
+                    )
+                except Exception as e:
+                    print(f"[AnomalyZones] Redis cache save error: {e}")
 
             # 保存并发送异常区域数据
+            # We save both zones and points.
+            # Use save_anomaly_zones for zones (compatible)
             if anomaly_zones:
                 message.save_anomaly_zones(anomaly_zones, stock_code)
 
-                await self._emit_event(
-                    event_queue,
-                    message,
-                    {
-                        "type": "data",
-                        "data_type": "anomaly_zones",
-                        "data": {"zones": anomaly_zones, "ticker": stock_code},
+            # Send combined data
+            await self._emit_event(
+                event_queue,
+                message,
+                {
+                    "type": "data",
+                    "data_type": "anomaly_zones",
+                    "data": {
+                        "zones": anomaly_zones,
+                        "anomalies": anomalies,  # Add anomalies here for frontend
+                        "ticker": stock_code,
                     },
-                )
-                print(f"[AnomalyZones] Successfully saved and emitted")
+                },
+            )
+            print(f"[AnomalyZones] Successfully saved and emitted")
 
         except Exception as e:
             import traceback
