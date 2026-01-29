@@ -65,39 +65,45 @@ export function ChartNewsSidebar({ isOpen, onClose, news, loading, selectedDate,
     const dateRangeEnd = selectedDate ? new Date(selectedDate) : new Date();
     if (selectedDate) dateRangeEnd.setDate(dateRangeEnd.getDate() + 1);
 
-    // 四层排序：热门资讯 → 所有公告 → 所有研报 → 其他资讯
-    const hotNews = news.filter(n => n.read_count >= 10000);
-    const allAnnouncements = news.filter(n => {
-        const type = (n.content_type || '').toLowerCase();
-        return n.read_count < 10000 && (type === '公告' || type === 'notice');
-    });
-    const allReports = news.filter(n => {
-        const type = (n.content_type || '').toLowerCase();
-        return n.read_count < 10000 && (type === '研报' || type === 'report');
-    });
-    const regularNews = news.filter(n => {
-        const type = (n.content_type || '').toLowerCase();
-        return n.read_count < 10000 && !['研报', 'report', '公告', 'notice'].includes(type);
-    });
+    // Memoize the sorted news to prevent expensive re-calculations on every render
+    const sortedNews = React.useMemo(() => {
+        if (!news || news.length === 0) return [];
 
-    // 热门和其他资讯按热度排序
-    const sortByScore = (a: NewsItem, b: NewsItem) => {
-        const scoreA = a.read_count + a.comment_count * 5;
-        const scoreB = b.read_count + b.comment_count * 5;
-        return scoreB - scoreA;
-    };
+        // 四层排序：热门资讯 → 所有公告 → 所有研报 → 其他资讯
+        const hotNews = news.filter(n => n.read_count >= 10000);
+        const allAnnouncements = news.filter(n => {
+            const type = (n.content_type || '').toLowerCase();
+            return n.read_count < 10000 && (type === '公告' || type === 'notice');
+        });
+        const allReports = news.filter(n => {
+            const type = (n.content_type || '').toLowerCase();
+            return n.read_count < 10000 && (type === '研报' || type === 'report');
+        });
+        const regularNews = news.filter(n => {
+            const type = (n.content_type || '').toLowerCase();
+            return n.read_count < 10000 && !['研报', 'report', '公告', 'notice'].includes(type);
+        });
 
-    // 公告和研报按时间排序
-    const sortByTime = (a: NewsItem, b: NewsItem) => {
-        return new Date(b.publish_time).getTime() - new Date(a.publish_time).getTime();
-    };
+        // 热门和其他资讯按热度排序
+        const sortByScore = (a: NewsItem, b: NewsItem) => {
+            const scoreA = a.read_count + a.comment_count * 5;
+            const scoreB = b.read_count + b.comment_count * 5;
+            return scoreB - scoreA;
+        };
 
-    hotNews.sort(sortByScore);
-    allAnnouncements.sort(sortByTime);
-    allReports.sort(sortByTime);
-    regularNews.sort(sortByScore);
+        // 公告和研报按时间排序
+        const sortByTime = (a: NewsItem, b: NewsItem) => {
+            return new Date(b.publish_time).getTime() - new Date(a.publish_time).getTime();
+        };
 
-    const sortedNews = [...hotNews, ...allAnnouncements, ...allReports, ...regularNews];
+        hotNews.sort(sortByScore);
+        allAnnouncements.sort(sortByTime);
+        allReports.sort(sortByTime);
+        regularNews.sort(sortByScore);
+
+        // Cap at 100 items to preventing rendering freeze with large datasets
+        return [...hotNews, ...allAnnouncements, ...allReports, ...regularNews].slice(0, 100);
+    }, [news]);
 
     const dateRangeText = selectedDate
         ? `${formatDate(dateRangeStart.toISOString())} - ${formatDate(dateRangeEnd.toISOString())}`

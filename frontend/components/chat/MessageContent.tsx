@@ -333,7 +333,17 @@ function InteractiveChart({ content }: { content: ChartContent }) {
         const response = await fetch(`/api/news?ticker=${ticker}&date=${selectedDate}&range=2`);
         if (!response.ok) throw new Error('Failed to fetch news');
         const data = await response.json();
-        setNewsData(data.news || []);
+
+        const newsItems = data.news || [];
+        console.log(`[NewsFetch] Loaded ${newsItems.length} items for date ${selectedDate}`);
+
+        // Safety cap to prevent browser freeze if backend returns too much data
+        if (newsItems.length > 500) {
+          console.warn('[NewsFetch] Too many news items, capping at 500');
+          setNewsData(newsItems.slice(0, 500));
+        } else {
+          setNewsData(newsItems);
+        }
       } catch (error) {
         console.error('Failed to load news:', error);
         setNewsData([]);
@@ -359,8 +369,10 @@ function InteractiveChart({ content }: { content: ChartContent }) {
 
   // 图表点击处理
   const handleChartClick = useCallback((e: any) => {
+    console.log('[ChartClick] Event received:', e);
     if (e && e.activeLabel && ticker) {
       const date = e.activeLabel as string;
+      console.log('[ChartClick] Setting selected date:', date);
       setSelectedDate(date);
       setNewsSidebarOpen(true);
 
@@ -369,6 +381,8 @@ function InteractiveChart({ content }: { content: ChartContent }) {
       params.set('selectedDate', date);
       params.set('sidebarOpen', 'true');
       window.history.replaceState({}, '', `${window.location.pathname}?${params}`);
+    } else {
+      console.warn('[ChartClick] Missing required data:', { activeLabel: e?.activeLabel, ticker });
     }
   }, [ticker]);
 
@@ -1025,13 +1039,212 @@ function InteractiveChart({ content }: { content: ChartContent }) {
 
   // Filter Anomalies
   // @ts-ignore
-  const visibleAnomalies = (anomalies || []).filter((a: any) => {
-    if (anomalyAlgo === 'all') return true;
-    return (a.method || 'bcpd') === anomalyAlgo;
-  });
+  // Filter Anomalies - Memoized to prevent re-renders
+  // @ts-ignore
+  const visibleAnomalies = useMemo(() => {
+    return (anomalies || []).filter((a: any) => {
+      if (anomalyAlgo === 'all') return true;
+      return (a.method || 'bcpd') === anomalyAlgo;
+    });
+  }, [anomalies, anomalyAlgo]);
 
   // 如果标题包含"预测"，则不显示（因为外层已有"价格走势分析"标题）
   const shouldShowTitle = title && !title.includes('预测')
+
+  // ------------------------------------------------------------------
+  // Memoized Chart Elements to prevent Jitter
+  // ------------------------------------------------------------------
+
+  // 1. Semantic Zones (Areas)
+  const semanticZoneElements = useMemo(() => {
+    if (!useSemanticRegimes) return null;
+    return semanticRegimes.map((regime: any, idx: number) => {
+      const sentiment = regime.sentiment || regime.displayType;
+      const isPositive = sentiment === 'positive' || sentiment === 'up';
+      const isNegative = sentiment === 'negative' || sentiment === 'down';
+      const isSideways = sentiment === 'sideways' || sentiment === 'neutral';
+      const fill = isPositive ? '#ef4444' : (isNegative ? '#10b981' : '#6b7280');
+      const isPrediction = regime.isPrediction;
+      const baseOpacity = isPrediction ? 0.15 : (isSideways ? 0.2 : 0.3);
+      const uniqueKey = `regime-area-${regime.startDate}-${idx}`;
+
+      return (
+        <ReferenceArea
+          key={uniqueKey}
+          x1={regime.startDate}
+          x2={regime.endDate}
+          fill={fill}
+          fillOpacity={baseOpacity}
+          stroke={isPrediction ? fill : "none"}
+          strokeDasharray={isPrediction ? "5 5" : undefined}
+          className="cursor-pointer hover:opacity-80 transition-opacity"
+          onMouseEnter={() => setActiveZone(regime)}
+          onMouseLeave={() => setActiveZone(null)}
+        // onClick removed to allow chart click (news) to pass through
+        >
+          <Label
+            value={regime.totalChange}
+            position="insideTop"
+            fill={fill}
+            fontSize={10}
+            className="font-mono font-bold opacity-70"
+          />
+        </ReferenceArea>
+      );
+    });
+  }, [useSemanticRegimes, semanticRegimes]);
+
+  // 2. Anomaly Lookup Map (Faster Access)
+  const anomalyMap = useMemo(() => {
+    const map = new Map();
+    visibleAnomalies.forEach((anom: any) => {
+      map.set(anom.date, anom);
+    });
+    return map;
+  }, [visibleAnomalies]);
+
+  // 3. Flag Icon Component
+  const FlagIcon = (props: any) => {
+    const { cx, cy, fill, className, onMouseEnter, onMouseLeave, onClick } = props;
+    return (
+      <g transform={`translate(${cx}, ${cy})`} className={className}
+        onMouseEnter={onMouseEnter} onMouseLeave={onMouseLeave} onClick={onClick}
+        style={{ pointerEvents: 'all', cursor: 'pointer' }}
+      >
+        <line x1="0" y1="0" x2="0" y2="-12" stroke="#9ca3af" strokeWidth="1.5" />
+        <path d="M0,-12 L8,-8 L0,-4 Z" fill={fill} stroke="none" />
+        <circle cx="0" cy="-12" r="1.5" fill="#9ca3af" />
+        {/* Hit area for easier clicking */}
+        <rect x="-4" y="-14" width="14" height="16" fill="transparent" />
+      </g>
+    )
+  }
+
+  // 4. Anomaly Flags Elements (Placed near data points, non-interactive)
+  const anomalyFlagElements = useMemo(() => {
+    if (!yAxisDomain || !displayData) return null;
+    if (!visibleAnomalies || visibleAnomalies.length === 0) return null;
+
+    // Create a quick lookup for data values by date
+    // We prioritize '历史价格'
+    const priceMap = new Map();
+    displayData.forEach((d: any) => {
+      if (d['历史价格'] !== undefined && d['历史价格'] !== null) {
+        priceMap.set(d.name, d['历史价格']);
+      }
+    });
+
+    return visibleAnomalies.map((anom: any, idx: number) => {
+      const uniqueKey = `anomaly-flag-${anom.date}-${idx}`;
+      const price = priceMap.get(anom.date);
+
+      // If no price found for this date (e.g. range mismatch), skip or fallback
+      // Fallback to top edge if really needed, but user said "plug back onto line"
+      // If price is missing, we might not render it or render at 0.
+      if (price === undefined) return null;
+
+      const colorMap: Record<string, string> = {
+        'signal_service': '#FBBF24',
+        'bcpd': '#F59E0B',
+        'stl_cusum': '#EF4444',
+        'matrix_profile': '#8B5CF6'
+      };
+      const fill = colorMap[anom.method] || '#FBBF24';
+
+      return (
+        <ReferenceDot
+          key={uniqueKey}
+          x={anom.date}
+          y={price}
+          r={0}
+          shape={(props: any) => (
+            <FlagIcon
+              {...props}
+              fill={fill}
+              className="z-0 opacity-80"
+              // Purely visual, no interaction
+              style={{ pointerEvents: 'none' }}
+            />
+          )}
+          isFront={true}
+        />
+      );
+    });
+  }, [visibleAnomalies, yAxisDomain, displayData]);
+
+
+
+  // 3. Raw Zones (Areas)
+  const rawZoneElements = useMemo(() => {
+    if (useSemanticRegimes) return null;
+    return visibleZones.map((zone: any, idx: number) => {
+      // A股配色：红涨绿跌
+      const isPositive = (zone.avg_return || 0) >= 0;
+      const zoneColor = isPositive
+        ? { fill: 'rgba(239, 68, 68, 0.04)', stroke: '#ef4444' }
+        : { fill: 'rgba(34, 197, 94, 0.04)', stroke: '#22c55e' };
+
+      const impact = zone.impact || 0.5;
+      const isCalm = zone.zone_type === 'calm';
+      const uniqueKey = `zone-${zone.startDate}-${zone.endDate}-${idx}`;
+
+      // FIX: 单日zones需要扩展宽度，否则ReferenceArea不显示
+      let displayStartDate = zone.startDate;
+      if (zone.startDate === zone.endDate) {
+        const startIdx = chartData.findIndex((d: any) => d.name === zone.startDate);
+        if (startIdx > 0) {
+          displayStartDate = chartData[startIdx - 1].name;
+        }
+      }
+
+      return (
+        <ReferenceArea
+          key={uniqueKey}
+          x1={displayStartDate}
+          x2={zone.endDate}
+          fill={zoneColor.fill}
+          fillOpacity={impact * 0.8}
+          stroke={zoneColor.stroke}
+          strokeOpacity={impact}
+          strokeDasharray={isCalm ? '5 5' : undefined}
+          onMouseEnter={() => setActiveZone(zone)}
+          onMouseLeave={() => setActiveZone(null)}
+          // onClick removed
+          className="cursor-pointer transition-all duration-300"
+        />
+      );
+    });
+  }, [useSemanticRegimes, visibleZones, chartData]);
+
+  // 4. Semantic Events (Dots)
+  const semanticEventElements = useMemo(() => {
+    if (!useSemanticRegimes) return null;
+    if (!yAxisDomain) return null;
+
+    return semanticRegimes.flatMap((regime: any, idx: any) =>
+      regime.events.map((ev: any, evIdx: any) => {
+        const dotColor = ev.method === 'bcpd' ? '#fbbf24' : (ev.method === 'matrix_profile' ? '#c084fc' : '#f87171');
+        const yPos = yAxisDomain[0] + (yAxisDomain[1] - yAxisDomain[0]) * 0.05;
+
+        return (
+          <ReferenceDot
+            key={`regime-event-${idx}-${evIdx}`}
+            x={ev.date}
+            y={yPos}
+            r={4}
+            fill={dotColor}
+            stroke="#fff"
+            strokeWidth={1}
+            className="cursor-pointer hover:r-6 transition-all"
+            isFront={true}
+          >
+            <Label value="" />
+          </ReferenceDot>
+        );
+      })
+    );
+  }, [useSemanticRegimes, semanticRegimes, yAxisDomain]);
+
 
   return (
     <div className="mt-2">
@@ -1048,6 +1261,7 @@ function InteractiveChart({ content }: { content: ChartContent }) {
           {shouldShowTitle && (
             <h4 className="text-sm font-medium text-gray-300">{title}</h4>
           )}
+
           {/* Semantic Toggle Button - Always show if we have zones */}
           {(semantic_zones.length > 0 || anomalyZones.length > 0) && (
             <button
@@ -1144,165 +1358,50 @@ function InteractiveChart({ content }: { content: ChartContent }) {
               width={60}
             />
             <Tooltip
-              contentStyle={{
-                backgroundColor: '#1a1a24',
-                border: '1px solid rgba(255, 255, 255, 0.1)',
-                borderRadius: '8px',
+              content={(props: any) => {
+                // If activeZone exists, we show custom tooltip (outside chart), so hide default one
+                if (activeZone) return null;
+
+                // Default Recharts Tooltip styling
+                const { active, payload, label } = props;
+                if (active && payload && payload.length) {
+                  return (
+                    <div className="bg-[#1a1a24] border border-white/10 rounded-lg p-3 shadow-xl">
+                      <p className="text-gray-400 text-xs mb-2">{label}</p>
+                      {payload.map((entry: any, index: number) => {
+                        if (entry.value === null || entry.value === undefined || isNaN(entry.value)) return null;
+                        const displayValue = typeof entry.value === 'number' ? entry.value.toFixed(2) : entry.value;
+                        return (
+                          <div key={index} className="flex items-center gap-2 text-sm">
+                            <span className="w-2 h-2 rounded-full" style={{ backgroundColor: entry.color }} />
+                            <span className="text-gray-300">{entry.name}:</span>
+                            <span className="font-mono text-white">{displayValue}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                }
+                return null;
               }}
-              labelStyle={{ color: '#9ca3af' }}
             />
             <Legend
               wrapperStyle={{ fontSize: '12px' }}
             />
-            {/* 异常区域与悬浮提示 - Bloomberg风格 */}
-            {/* 区域渲染逻辑：语义合并 vs 原始分段 */}
-            {/* 1. Semantic Regimes: Areas */}
-            {useSemanticRegimes && semanticRegimes.map((regime: any, idx: number) => {
-              // CRITICAL FIX: Use sentiment field (from backend) instead of displayType
-              const sentiment = regime.sentiment || regime.displayType;
-              const isPositive = sentiment === 'positive' || sentiment === 'up';
-              const isNegative = sentiment === 'negative' || sentiment === 'down';
-              const isSideways = sentiment === 'sideways' || sentiment === 'neutral';
+            {/* 1. Semantic Regimes (Memoized) */}
+            {semanticZoneElements}
 
-              // A-share colors: Red for Up/Positive, Green for Down/Negative, Gray for Sideways
-              const fill = isPositive ? '#ef4444' : (isNegative ? '#10b981' : '#6b7280');
-
-              // Prediction Styling
-              const isPrediction = regime.isPrediction;
-              const baseOpacity = isPrediction ? 0.15 : (isSideways ? 0.2 : 0.3); // High transparency for prediction
-
-              const uniqueKey = `regime-area-${regime.startDate}-${idx}`;
-
-              return (
-                <ReferenceArea
-                  key={uniqueKey}
-                  x1={regime.startDate}
-                  x2={regime.endDate}
-                  fill={fill}
-                  fillOpacity={baseOpacity}
-                  stroke={isPrediction ? fill : "none"}
-                  strokeDasharray={isPrediction ? "5 5" : undefined}
-                  className="cursor-pointer hover:opacity-80 transition-opacity"
-                  onMouseEnter={() => {
-                    // console.log('[SEMANTIC ZONE HOVER]', regime);
-                    // console.log('[SEMANTIC ZONE EVENTS]', regime.events);
-                    setActiveZone(regime);
-                  }}
-                  onMouseLeave={() => setActiveZone(null)}
-                  onClick={(e) => { e.stopPropagation(); setActiveZone(regime); }}
-                >
-                  <Label
-                    value={regime.totalChange}
-                    position="insideTop"
-                    fill={fill}
-                    fontSize={10}
-                    className="font-mono font-bold opacity-70"
-                  />
-                </ReferenceArea>
-              );
-            })}
+            {/* 2. Anomalies (Memoized) - REMOVED for Intrinsic Dots */}
 
 
+            {/* 3. Raw Zones (Memoized) */}
+            {rawZoneElements}
 
-
-            {/* 2. Anomalies: Points of Interest */}
-            {visibleAnomalies.map((anom: any, idx: number) => {
-              // Ensure anomaly is within view
-              const isInView = true; // Recharts ReferenceDot handles visibility automatically if x is valid
-
-              if (!isInView) return null;
-
-              const uniqueKey = `anomaly-${anom.date}-${idx}`;
-
-              return (
-                <ReferenceDot
-                  key={uniqueKey}
-                  x={anom.date}
-                  y={anom.price}
-                  r={5}
-                  fill="#FBBF24"  // Yellow-400
-                  stroke="#ffffff"
-                  strokeWidth={2}
-                  isFront={false}
-                  style={{ pointerEvents: useSemanticRegimes ? 'none' : 'auto' }}
-                  className="cursor-pointer transition-opacity"
-                  onMouseEnter={!useSemanticRegimes ? () => {
-                    // Only show anomaly tooltip in raw mode
-                    // In semantic mode, zones already contain this info
-                    const mockZone = {
-                      type: 'anomaly',
-                      displayType: 'anomaly',
-                      startDate: anom.date,
-                      endDate: anom.date,
-                      summary: anom.description || '异常波动点',
-                      event_summary: anom.description,
-                      isAnomaly: true,
-                      data: anom
-                    }
-                    setActiveZone(mockZone);
-                  } : undefined}
-                  onMouseLeave={!useSemanticRegimes ? () => setActiveZone(null) : undefined}
-                >
-                  <Label
-                    value="" // No text inside dot
-                    position="top"
-                  />
-                </ReferenceDot>
-              );
-            })}
-
-
-
-            {!useSemanticRegimes && visibleZones.map((zone: any, idx: number) => {
-              // A股配色：红涨绿跌
-              const isPositive = (zone.avg_return || 0) >= 0
-              const zoneColor = isPositive
-                ? { fill: 'rgba(239, 68, 68, 0.04)', stroke: '#ef4444' }  // 红色=上涨
-                : { fill: 'rgba(34, 197, 94, 0.04)', stroke: '#22c55e' }   // 绿色=下跌
-
-              const impact = zone.impact || 0.5
-              const isCalm = zone.zone_type === 'calm'
-
-              // 使用唯一key：startDate-endDate组合
-              const uniqueKey = `zone-${zone.startDate}-${zone.endDate}-${idx}`
-
-              // FIX: 单日zones需要扩展宽度，否则ReferenceArea不显示
-              let displayStartDate = zone.startDate
-              if (zone.startDate === zone.endDate) {
-                const startIdx = chartData.findIndex((d: any) => d.name === zone.startDate)
-                if (startIdx > 0) {
-                  displayStartDate = chartData[startIdx - 1].name
-                }
-              }
-
-              return (
-                <ReferenceArea
-                  key={uniqueKey}
-                  x1={displayStartDate}
-                  x2={zone.endDate}
-                  fill={zoneColor.fill}
-                  fillOpacity={impact * 0.8}
-                  stroke={zoneColor.stroke}
-                  strokeOpacity={impact}
-                  strokeDasharray={isCalm ? '5 5' : undefined}
-                  onMouseEnter={() => setActiveZone(zone)}
-                  onMouseLeave={() => setActiveZone(null)}
-                  onClick={(e) => { e.stopPropagation(); setActiveZone(zone); }}
-                  className="cursor-pointer transition-all duration-300"
-                />
-              )
-            })}
-
-
-
-            {/* 鼠标跟随的水平参考线 */}
+            {/* 4. Mouse Follow Line */}
             {mouseY !== null && plotAreaBounds && (() => {
               // mouseY 已经是相对于绘图区域顶部的坐标
               const effectiveHeight = plotAreaBounds.height
-
-              // 计算对应的数据值
               const dataValue = yAxisDomain[1] - (mouseY / effectiveHeight) * (yAxisDomain[1] - yAxisDomain[0])
-
               return (
                 <ReferenceLine
                   y={dataValue}
@@ -1318,13 +1417,11 @@ function InteractiveChart({ content }: { content: ChartContent }) {
                 />
               )
             })()}
-            {/* 回测分割线 - 垂直参考线 */}
+
+            {/* 5. Backtest Split Line */}
             {((hasBacktestSupport && backtest.splitDate) || (isDraggingSlider && tempSplitDate)) && (() => {
-              // 拖拽时使用临时日期，否则使用回测分割日期
               const splitDate = (isDraggingSlider && tempSplitDate) ? tempSplitDate : backtest.splitDate
               if (!splitDate) return null
-
-              // 检查分割日期是否在当前显示的数据中
               const splitDataPoint = displayData.find((item: any) => item.name === splitDate)
               if (splitDataPoint) {
                 return (
@@ -1338,7 +1435,8 @@ function InteractiveChart({ content }: { content: ChartContent }) {
               }
               return null
             })()}
-            {/* 回测模式：3条线 */}
+
+            {/* 6. Chart Lines */}
             {backtest.chartData ? (
               <>
                 <Line
@@ -1346,9 +1444,8 @@ function InteractiveChart({ content }: { content: ChartContent }) {
                   dataKey="历史价格"
                   stroke="#a855f7"
                   strokeWidth={2}
-                  dot={{ r: 3 }}
-                  activeDot={{ r: 5 }}
-                  connectNulls={false}
+                  dot={false}
+                  activeDot={{ r: 6, fill: '#818cf8', stroke: '#312e81', strokeWidth: 2 }}
                   isAnimationActive={false}
                   name="历史价格"
                 />
@@ -1377,51 +1474,30 @@ function InteractiveChart({ content }: { content: ChartContent }) {
                 />
               </>
             ) : (
-              /* 正常模式：原有数据集 */
               data.datasets.map((dataset: any, index: any) => (
                 <Line
                   key={dataset.label}
                   type="monotone"
                   dataKey={dataset.label}
-                  stroke={dataset.color || colors[index % colors.length]}
+                  stroke={dataset.color}
                   strokeWidth={2}
-                  dot={{ r: 3 }}
-                  activeDot={{ r: 5 }}
-                  connectNulls={false}
+                  dot={false}
+                  activeDot={{ r: 6, strokeWidth: 2 }}
                   isAnimationActive={false}
+                  connectNulls={false}
                 />
               ))
             )}
 
-            {/* 2. Semantic Regimes: Event Dots (Moved to Top Layer) */}
-            {useSemanticRegimes && semanticRegimes.flatMap((regime: any, idx: any) =>
-              regime.events.map((ev: any, evIdx: any) => {
-                const dotColor = ev.method === 'bcpd' ? '#fbbf24' : (ev.method === 'matrix_profile' ? '#c084fc' : '#f87171');
-                const yPos = yAxisDomain[0] + (yAxisDomain[1] - yAxisDomain[0]) * 0.05;
+            {/* 7. Semantic Event Dots (Memoized) */}
+            {semanticEventElements}
 
-                return (
-                  <ReferenceDot
-                    key={`regime-event-${idx}-${evIdx}`}
-                    x={ev.date}
-                    y={yPos}
-                    r={4}
-                    fill={dotColor}
-                    stroke="#fff"
-                    strokeWidth={1}
-                    className="cursor-pointer hover:r-6 transition-all"
-                    isFront={true}
-                  >
-                    <Label value="" />
-                  </ReferenceDot>
-                );
-              })
-            )}
-
-            {/* 异常点调试日志 (控制台可见) */}
+            {/* 8. Anomaly Flags (Top Row) */}
+            {anomalyFlagElements}
             {(() => {
-              console.log("[MessageContent] Anomalies Prop:", anomalies?.length || 0);
-              console.log("[MessageContent] Visible Anomalies:", visibleAnomalies.length);
-              console.log("[MessageContent] Prediction Zones:", prediction_semantic_zones?.length || 0);
+              // console.log("[MessageContent] Anomalies Prop:", anomalies?.length || 0);
+              // console.log("[MessageContent] Visible Anomalies:", visibleAnomalies.length);
+              // console.log("[MessageContent] Prediction Zones:", prediction_semantic_zones?.length || 0);
               if (anomalies && anomalies.length > 0 && visibleAnomalies.length === 0) {
                 console.warn("[MessageContent] WARNING: Anomalies exist but none are visible! Check date format match.",
                   "Anomaly Sample:", anomalies[0],
@@ -1431,98 +1507,6 @@ function InteractiveChart({ content }: { content: ChartContent }) {
               return null;
             })()}
 
-            {/* 异常点 - ReferenceDot (Visible in ALL modes, styled as Signal Points) */}
-            {visibleAnomalies.map((anomaly: any, idx: number) => {
-              // Validate anomaly has required fields
-              if (!anomaly.date || anomaly.price === undefined) {
-                // console.warn(`[Anomaly Rendering] Skipping anomaly ${idx}: missing date or price`, anomaly);
-                return null;
-              }
-
-              // Check if date exists in FULL chartData (not just displayData which is zoom-filtered)
-              const dateExists = chartData.some((d: any) => d.name === anomaly.date);
-              if (!dateExists) {
-                // Date not in dataset at all (weekends or missing data)
-                return null;
-              }
-
-              // Color Mapping: Use Yellow/Amber for Signal Service (New Standard)
-              // method 'signal_service' -> #FBBF24 (Amber-400) or #F59E0B (Amber-500)
-              // Keep legacy colors just in case
-              const colorMap: Record<string, string> = {
-                'signal_service': '#FBBF24', // Bright Amber (Eye-catching)
-                'bcpd': '#F59E0B',
-                'stl_cusum': '#EF4444',
-                'matrix_profile': '#8B5CF6'
-              };
-              const dotColor = colorMap[anomaly.method] || '#FBBF24';
-
-              // Size: Magnified for Signal Service
-              const dotSize = anomaly.method === 'signal_service' ? 6 : 5;
-              const hoverSize = anomaly.method === 'signal_service' ? 9 : 7;
-
-              if (anomaly.method === 'signal_service') {
-                return (
-                  <ReferenceDot
-                    key={`anomaly-${anomaly.method}-${idx}`}
-                    x={anomaly.date}
-                    y={anomaly.price}
-                    r={6}
-                    fill={dotColor}
-                    stroke="#fff"
-                    strokeWidth={2}
-                    className="cursor-pointer transition-all duration-300 animate-pulse hover:scale-150 z-50"
-                    isFront={true}
-                    onMouseEnter={() => {
-                      const mockZone = {
-                        type: 'anomaly',
-                        displayType: 'anomaly',
-                        startDate: anomaly.date,
-                        endDate: anomaly.date,
-                        summary: anomaly.description || '异常波动点',
-                        event_summary: anomaly.description,
-                        isAnomaly: true,
-                        data: anomaly
-                      }
-                      setActiveZone(mockZone);
-                    }}
-                    onMouseLeave={() => setActiveZone(null)}
-                  >
-                    <Label value="" />
-                  </ReferenceDot>
-                );
-              }
-
-              return (
-                <ReferenceDot
-                  key={`anomaly-${anomaly.method}-${idx}`}
-                  x={anomaly.date}
-                  y={anomaly.price}
-                  r={5}
-                  fill={dotColor}
-                  stroke="#fff"
-                  strokeWidth={2}
-                  className={`cursor-pointer transition-all duration-300 animate-in zoom-in-50`}
-                  isFront={true}
-                  onMouseEnter={() => {
-                    const mockZone = {
-                      type: 'anomaly',
-                      displayType: 'anomaly',
-                      startDate: anomaly.date,
-                      endDate: anomaly.date,
-                      summary: anomaly.description || '异常波动点',
-                      event_summary: anomaly.description,
-                      isAnomaly: true,
-                      data: anomaly
-                    }
-                    setActiveZone(mockZone);
-                  }}
-                  onMouseLeave={() => setActiveZone(null)}
-                >
-                  <Label value="" />
-                </ReferenceDot>
-              );
-            })}
           </LineChart>
         </ResponsiveContainer>
 
