@@ -21,7 +21,7 @@ async def check_external_services():
         rag_client = get_rag_client()
         health = await rag_client.health()
         if health.get("status") == "healthy":
-            doc_count = health.get('total_documents', 0)
+            doc_count = health.get("total_documents", 0)
             print(f"[Startup] RAG 服务连接正常，文档数量: {doc_count}")
         else:
             print(f"[Startup] RAG 服务状态: {health.get('status', 'unknown')}")
@@ -63,14 +63,18 @@ app.add_middleware(
 
 app.include_router(api_router_v2, prefix="/api")
 
+
 @app.get("/")
 async def root():
     return {"message": "小易猜猜 API", "version": "2.0.0"}
+
 
 @app.get("/health")
 async def health():
     return {"status": "ok"}
 
+
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=8000)

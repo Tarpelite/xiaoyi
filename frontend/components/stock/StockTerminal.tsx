@@ -20,11 +20,21 @@ interface NewsItem {
   notice_type?: string;
 }
 
+interface AnomalyPoint {
+  date: string;
+  price: number;
+  score: number;
+  description: string;
+  method: string;
+}
+
 interface AnomalyZone {
   startDate: string;
   endDate: string;
   summary: string;
   sentiment: 'positive' | 'negative' | 'neutral';
+  method?: string;
+  avg_score?: number;
 }
 
 interface StockDataPoint {
@@ -235,9 +245,22 @@ const NewsSidebar: React.FC<NewsSidebarProps> = ({ isOpen, onClose, news, loadin
   );
 };
 
+const AlgoSelect: React.FC<{ label: string; value: string; options: { label: string; value: string }[]; onChange: (v: string) => void }> = ({ label, value, options, onChange }) => (
+  <div className="flex items-center gap-2">
+    <span className="text-xs text-slate-500">{label}</span>
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      className="bg-slate-800/50 border border-slate-700 text-xs text-slate-300 rounded px-2 py-1 outline-none focus:border-blue-500"
+    >
+      {options.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+    </select>
+  </div>
+);
+
 const API_BASE = typeof window !== 'undefined' ? `/api` : 'http://localhost:8000/api';
 
-async function fetchStockEvents(ticker: string, start?: string, end?: string): Promise<{ price_data: StockDataPoint[]; anomaly_zones: AnomalyZone[]; significant_news: NewsItem[] }> {
+async function fetchStockEvents(ticker: string, start?: string, end?: string): Promise<{ price_data: StockDataPoint[]; anomaly_zones: AnomalyZone[]; anomalies: AnomalyPoint[]; significant_news: NewsItem[] }> {
   const params = new URLSearchParams({ code: ticker });
   if (start) params.append('start', start);
   if (end) params.append('end', end);
@@ -262,10 +285,18 @@ async function fetchAnomalyZones(ticker: string, days: number = 30): Promise<Ano
   return data.anomaly_zones;
 }
 
+
+
 export const StockTerminal: React.FC<{ ticker?: string; initialDate?: string }> = ({ ticker = '600519', initialDate }) => {
   const [stockData, setStockData] = useState<StockDataPoint[]>([]);
   const [anomalyZones, setAnomalyZones] = useState<AnomalyZone[]>([]);
+  const [anomalies, setAnomalies] = useState<AnomalyPoint[]>([]); // New state
   const [news, setNews] = useState<NewsItem[]>([]);
+
+  // Algorithm Selection State
+  const [trendAlgo, setTrendAlgo] = useState<string>('plr');
+  const [anomalyAlgo, setAnomalyAlgo] = useState<string>('all');
+
   const [selectedDate, setSelectedDate] = useState<string>(initialDate || '');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -286,10 +317,12 @@ export const StockTerminal: React.FC<{ ticker?: string; initialDate?: string }> 
         console.log('Received data:', {
           priceDataCount: data.price_data.length,
           anomalyZonesCount: data.anomaly_zones.length,
+          anomaliesCount: (data.anomalies || []).length,
           significantNewsCount: data.significant_news.length
         });
         setStockData(data.price_data);
         setAnomalyZones(data.anomaly_zones);
+        setAnomalies(data.anomalies || []); // Set anomalies
         if (data.price_data.length > 0 && !selectedDate) {
           setSelectedDate(data.price_data[data.price_data.length - 1].date);
         }
@@ -319,6 +352,17 @@ export const StockTerminal: React.FC<{ ticker?: string; initialDate?: string }> 
     };
     loadNews();
   }, [sidebarOpen, selectedDate]);
+
+  // Filtered Data
+  const visibleZones = anomalyZones.filter(z => {
+    if (trendAlgo === 'all') return true;
+    return z.method === trendAlgo;
+  });
+
+  const visibleAnomalies = anomalies.filter(a => {
+    if (anomalyAlgo === 'all') return true;
+    return a.method === anomalyAlgo;
+  });
 
   const handleDateSelect = useCallback((date: string) => {
     console.log('Date selected:', date);
@@ -404,7 +448,30 @@ export const StockTerminal: React.FC<{ ticker?: string; initialDate?: string }> 
                 <div className="absolute top-4 left-4 right-4 flex items-center justify-between z-10">
                   <div className="flex items-center gap-4">
                     <h3 className="text-lg font-semibold text-white">股价走势</h3>
-                    {selectedDate && <span className="px-3 py-1 rounded-full bg-blue-500/20 text-blue-400 text-sm">{formatDate(selectedDate)}</span>}
+                    <div className="flex gap-3 ml-2">
+                      <AlgoSelect
+                        label="趋势"
+                        value={trendAlgo}
+                        options={[
+                          { label: 'PLR (线性分段)', value: 'plr' },
+                          { label: 'PELT (变点检测)', value: 'pelt' },
+                          { label: 'HMM (马尔可夫)', value: 'hmm' },
+                          { label: '全部', value: 'all' }
+                        ]}
+                        onChange={setTrendAlgo}
+                      />
+                      <AlgoSelect
+                        label="异常"
+                        value={anomalyAlgo}
+                        options={[
+                          { label: '全部', value: 'all' },
+                          { label: 'BCPD (贝叶斯)', value: 'bcpd' },
+                          { label: 'STL+CUSUM', value: 'stl_cusum' },
+                          { label: 'Matrix Profile', value: 'matrix_profile' }
+                        ]}
+                        onChange={setAnomalyAlgo}
+                      />
+                    </div>
                   </div>
                   <div className="flex items-center gap-2 text-sm text-slate-400">
                     <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-green-500/50" />上涨</span>
@@ -427,14 +494,49 @@ export const StockTerminal: React.FC<{ ticker?: string; initialDate?: string }> 
                     <XAxis dataKey="date" stroke="#64748b" tick={{ fill: '#64748b', fontSize: 12 }} tickFormatter={formatDate} tickLine={false} axisLine={false} />
                     <YAxis stroke="#64748b" tick={{ fill: '#64748b', fontSize: 12 }} tickFormatter={(v) => v.toFixed(2)} tickLine={false} axisLine={false} domain={['auto', 'auto']} />
                     <Tooltip content={<CustomTooltip />} />
-                    {anomalyZones.map((zone, idx) => (
-                      <ReferenceArea key={idx} x1={zone.startDate} x2={zone.endDate} fill={zone.sentiment === 'positive' ? 'rgba(34, 197, 94, 0.15)' : zone.sentiment === 'negative' ? 'rgba(239, 68, 68, 0.15)' : 'rgba(59, 130, 246, 0.15)'} fillOpacity={1} stroke={zone.sentiment === 'positive' ? '#22c55e' : zone.sentiment === 'negative' ? '#ef4444' : '#3b82f6'} strokeOpacity={0.5} onMouseEnter={() => setActiveZone(zone)} onMouseLeave={() => setActiveZone(null)} className="cursor-pointer transition-all duration-300" />
+
+                    {/* Render Filtered Zones */}
+                    {visibleZones.map((zone, idx) => (
+                      <ReferenceArea
+                        key={`zone-${idx}`}
+                        x1={zone.startDate}
+                        x2={zone.endDate}
+                        fill={zone.sentiment === 'positive' ? 'rgba(34, 197, 94, 0.1)' : zone.sentiment === 'negative' ? 'rgba(239, 68, 68, 0.1)' : 'rgba(59, 130, 246, 0.1)'}
+                        fillOpacity={1}
+                        stroke={zone.sentiment === 'positive' ? '#22c55e' : zone.sentiment === 'negative' ? '#ef4444' : '#3b82f6'}
+                        strokeOpacity={0.4}
+                        onMouseEnter={() => setActiveZone(zone)}
+                        onMouseLeave={() => setActiveZone(null)}
+                        className="cursor-pointer transition-all duration-300"
+                      />
                     ))}
+
+                    {/* Render Filtered Anomalies */}
+                    {visibleAnomalies.map((anom, idx) => (
+                      <ReferenceLine
+                        key={`anom-${idx}`}
+                        x={anom.date}
+                        stroke="rgba(255, 255, 255, 0.3)"
+                        strokeDasharray="3 3"
+                      />
+                    ))}
+
                     {selectedDate && <ReferenceLine x={selectedDate} stroke="#3b82f6" strokeDasharray="5 5" strokeWidth={2} />}
+
                     <Area type="monotone" dataKey="close" stroke="#3b82f6" strokeWidth={2} fill="url(#colorClose)" dot={(props) => {
                       const { cx, cy, payload, index } = props;
                       const isSelected = payload.date === selectedDate;
                       const isEvent = payload.is_event_triggered;
+
+                      // Check for anomaly match
+                      const isAnomaly = visibleAnomalies.find(a => a.date === payload.date);
+
+                      if (isAnomaly) {
+                        return (
+                          <circle key={`anom-dot-${index}`} cx={cx} cy={cy} r={6} fill="#fbbf24" stroke="#fff" strokeWidth={2} className="cursor-pointer animate-pulse" />
+                        );
+                      }
+
                       return (
                         <g key={index}>
                           <circle
@@ -447,27 +549,9 @@ export const StockTerminal: React.FC<{ ticker?: string; initialDate?: string }> 
                             className="transition-all duration-200 cursor-pointer"
                           />
                           {isEvent && (
-                            <circle
-                              cx={cx}
-                              cy={cy}
-                              r="6"
-                              fill="none"
-                              stroke="#fbbf24"
-                              strokeWidth="2"
-                              opacity="0.6"
-                            >
-                              <animate
-                                attributeName="r"
-                                values="6;12;6"
-                                dur="2s"
-                                repeatCount="indefinite"
-                              />
-                              <animate
-                                attributeName="opacity"
-                                values="0.6;0;0.6"
-                                dur="2s"
-                                repeatCount="indefinite"
-                              />
+                            <circle cx={cx} cy={cy} r="6" fill="none" stroke="#fbbf24" strokeWidth="2" opacity="0.6">
+                              <animate attributeName="r" values="6;12;6" dur="2s" repeatCount="indefinite" />
+                              <animate attributeName="opacity" values="0.6;0;0.6" dur="2s" repeatCount="indefinite" />
                             </circle>
                           )}
                         </g>

@@ -118,6 +118,21 @@ export interface MessageData {
   }>
   anomaly_zones_ticker: string | null
 
+  // 历史语义区间 (Added)
+  semantic_zones?: Array<any>
+
+  // 预测语义区间 (Added)
+  prediction_semantic_zones?: Array<any>
+
+  // 异常点（显著转折点）
+  anomalies?: Array<{
+    date: string
+    price: number
+    score: number
+    description: string
+    method: string
+  }>
+
   conclusion: string
 
   // 思考日志 (累积显示所有 LLM 调用的原始输出)
@@ -386,7 +401,7 @@ export interface FullStreamCallbacks {
   onStepComplete?: (step: number, data: Record<string, unknown>) => void
   onThinking?: (content: string) => void
   onIntent?: (intent: string, isForecast: boolean, reason: string) => void
-  onData?: (dataType: string, data: unknown, predictionStartDay?: string) => void
+  onData?: (dataType: string, data: unknown, predictionStartDay?: string, fullEvent?: any) => void
   onReportChunk?: (content: string) => void
   onChatChunk?: (content: string) => void
   onEmotionChunk?: (content: string) => void
@@ -491,10 +506,12 @@ export async function resumeStream(
 
               case 'data':
                 // console.log('[SSE] Data event - type:', event.data_type, 'data:', event.data)
+                // Pass the complete event so ChatArea can extract semantic_zones, anomalies, etc.
                 callbacks.onData?.(
                   event.data_type || '',
                   event.data,
-                  event.prediction_start_day
+                  event.prediction_start_day,
+                  event as any // Pass full event for additional fields
                 )
                 break
 

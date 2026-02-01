@@ -17,8 +17,10 @@ from enum import Enum
 
 # ========== 枚举类型 ==========
 
+
 class MessageStatus(str, Enum):
     """消息状态"""
+
     PENDING = "pending"
     PROCESSING = "processing"
     COMPLETED = "completed"
@@ -27,6 +29,7 @@ class MessageStatus(str, Enum):
 
 class StepStatus(str, Enum):
     """步骤状态"""
+
     PENDING = "pending"
     RUNNING = "running"
     COMPLETED = "completed"
@@ -35,8 +38,10 @@ class StepStatus(str, Enum):
 
 # ========== 基础数据类型 ==========
 
+
 class TimeSeriesPoint(BaseModel):
     """时序数据点"""
+
     date: str
     value: float
     is_prediction: bool = False
@@ -44,42 +49,48 @@ class TimeSeriesPoint(BaseModel):
 
 class StockInfo(BaseModel):
     """股票信息 (股票 RAG 匹配结果)"""
-    stock_code: str        # "600519"
-    stock_name: str        # "贵州茅台"
-    market: str            # "SH" | "SZ"
+
+    stock_code: str  # "600519"
+    stock_name: str  # "贵州茅台"
+    market: str  # "SH" | "SZ"
 
 
 class RAGSource(BaseModel):
     """RAG 来源 (研报)"""
-    filename: str          # "茅台2024研报.pdf"
-    page: int              # 页码
-    content_snippet: str   # 摘要片段
-    score: float = 0.0     # 相关度分数
+
+    filename: str  # "茅台2024研报.pdf"
+    page: int  # 页码
+    content_snippet: str  # 摘要片段
+    score: float = 0.0  # 相关度分数
 
 
 class SummarizedNewsItem(BaseModel):
     """LLM 总结后的新闻条目"""
-    summarized_title: str       # LLM 总结的标题
-    summarized_content: str     # LLM 总结的摘要
-    original_title: str         # 原标题
-    url: str                    # 来源链接
-    published_date: str         # 格式化后的时间，如 "01-16 14:00"
-    source_type: str            # "search" | "domain_info"
-    source_name: str = ""       # 来源名称，如 "东方财富"、"新浪财经"
+
+    summarized_title: str  # LLM 总结的标题
+    summarized_content: str  # LLM 总结的摘要
+    original_title: str  # 原标题
+    url: str  # 来源链接
+    published_date: str  # 格式化后的时间，如 "01-16 14:00"
+    source_type: str  # "search" | "domain_info"
+    source_name: str = ""  # 来源名称，如 "东方财富"、"新浪财经"
 
 
 class ReportItem(BaseModel):
     """研报条目 (LLM 提取的观点)"""
-    title: str                  # 研报标题
-    viewpoint: str              # LLM 提取的观点
-    source: RAGSource           # 来源信息
+
+    title: str  # 研报标题
+    viewpoint: str  # LLM 提取的观点
+    source: RAGSource  # 来源信息
 
 
 # ========== 预测结果类型 ==========
 
+
 class ForecastMetrics(BaseModel):
     """预测模型性能指标"""
-    mae: float                  # 平均绝对误差
+
+    mae: float  # 平均绝对误差
     rmse: Optional[float] = None  # 均方根误差（Prophet 可能不返回）
 
 
@@ -89,13 +100,15 @@ class ForecastResult(BaseModel):
 
     所有 Forecaster 模型都返回此类型，消除中间转换
     """
+
     points: List[TimeSeriesPoint]  # 预测数据点（已标记 is_prediction=True）
-    metrics: ForecastMetrics       # 模型性能指标
-    model: str                     # 模型名称
+    metrics: ForecastMetrics  # 模型性能指标
+    model: str  # 模型名称
 
 
 class StepDetail(BaseModel):
     """步骤详情"""
+
     id: str
     name: str
     status: StepStatus = StepStatus.PENDING
@@ -104,13 +117,15 @@ class StepDetail(BaseModel):
 
 class ThinkingLogEntry(BaseModel):
     """思考日志条目 - 记录每个 LLM 调用的原始输出"""
-    step_id: str                    # 步骤 ID，如 "intent", "sentiment", "report"
-    step_name: str                  # 步骤名称，如 "意图识别", "情感分析", "报告生成"
-    content: str                    # LLM 原始输出内容
-    timestamp: str                  # ISO 格式时间戳
+
+    step_id: str  # 步骤 ID，如 "intent", "sentiment", "report"
+    step_name: str  # 步骤名称，如 "意图识别", "情感分析", "报告生成"
+    content: str  # LLM 原始输出内容
+    timestamp: str  # ISO 格式时间戳
 
 
 # ========== 意图识别相关 ==========
+
 
 class UnifiedIntent(BaseModel):
     """
@@ -123,6 +138,7 @@ class UnifiedIntent(BaseModel):
     - 初步关键词 (raw_*_keywords，股票匹配后会被优化)
     - 预测参数 (仅 is_forecast=true 时使用)
     """
+
     # 核心分支判断
     is_in_scope: bool = Field(..., description="是否在服务范围内 (金融/股票相关)")
     is_forecast: bool = Field(default=False, description="是否需要预测")
@@ -130,11 +146,17 @@ class UnifiedIntent(BaseModel):
     # 工具开关
     enable_rag: bool = Field(default=False, description="研报检索")
     enable_search: bool = Field(default=False, description="网络搜索 (Tavily)")
-    enable_domain_info: bool = Field(default=False, description="领域信息 (AkShare news)")
+    enable_domain_info: bool = Field(
+        default=False, description="领域信息 (AkShare news)"
+    )
 
     # 股票相关
-    stock_mention: Optional[str] = Field(default=None, description="用户提到的股票名称/代码")
-    stock_full_name: Optional[str] = Field(default=None, description="LLM 生成的股票官方全称 (如 '中石油' -> '中国石油')")
+    stock_mention: Optional[str] = Field(
+        default=None, description="用户提到的股票名称/代码"
+    )
+    stock_full_name: Optional[str] = Field(
+        default=None, description="LLM 生成的股票官方全称 (如 '中石油' -> '中国石油')"
+    )
 
     # 初步关键词 (LLM 提取，股票匹配后会被优化)
     raw_search_keywords: List[str] = Field(default_factory=list)
@@ -142,7 +164,9 @@ class UnifiedIntent(BaseModel):
     raw_domain_keywords: List[str] = Field(default_factory=list)
 
     # 预测参数 (仅 is_forecast=true 时使用)
-    forecast_model: Optional[str] = Field(default=None, description="预测模型名称，None 表示自动选择")
+    forecast_model: Optional[str] = Field(
+        default=None, description="预测模型名称，None 表示自动选择"
+    )
     print(f"[UnifiedIntent] forecast_model: {forecast_model}")
     history_days: int = Field(default=365)
     forecast_horizon: int = Field(default=30)
@@ -156,6 +180,7 @@ class UnifiedIntent(BaseModel):
 
 class ResolvedKeywords(BaseModel):
     """股票匹配后的最终关键词"""
+
     search_keywords: List[str] = Field(default_factory=list)
     rag_keywords: List[str] = Field(default_factory=list)
     domain_keywords: List[str] = Field(default_factory=list)
@@ -163,6 +188,7 @@ class ResolvedKeywords(BaseModel):
 
 class StockMatchResult(BaseModel):
     """股票匹配结果"""
+
     success: bool
     stock_info: Optional[StockInfo] = None
     confidence: float = 0.0
@@ -172,12 +198,14 @@ class StockMatchResult(BaseModel):
 
 # ========== 核心数据模型 ==========
 
+
 class MessageData(BaseModel):
     """
     单轮 QA 数据 (Message)
 
     每轮对话的完整分析结果，独立存储于 Redis
     """
+
     # 基础信息
     message_id: str
     session_id: str
@@ -206,6 +234,9 @@ class MessageData(BaseModel):
     time_series_full: List[TimeSeriesPoint] = Field(default_factory=list)
     prediction_done: bool = False
     prediction_start_day: Optional[str] = None
+    prediction_semantic_zones: List[Dict] = Field(
+        default_factory=list
+    )  # 新增：预测数据的语义区间
 
     # 新闻和研报
     news_list: List[SummarizedNewsItem] = Field(default_factory=list)
@@ -217,7 +248,13 @@ class MessageData(BaseModel):
     emotion_des: Optional[str] = None
 
     # 异常区域（用于图表标注）
-    anomaly_zones: List[Dict] = Field(default_factory=list)  # 存储 [{startDate, endDate, summary, sentiment}, ...]
+    anomalies: List[Dict] = Field(default_factory=list)  # 新增：异常点列表 (points)
+    semantic_zones: List[Dict] = Field(
+        default_factory=list
+    )  # 新增：语义区间列表 (history)
+    anomaly_zones: List[Dict] = Field(
+        default_factory=list
+    )  # 存储 [{startDate, endDate, summary, sentiment}, ...]
     anomaly_zones_ticker: Optional[str] = None  # 对应的股票代码
 
     # 结论
@@ -225,8 +262,12 @@ class MessageData(BaseModel):
     error_message: Optional[str] = None
 
     # 模型选择
-    model_selection_reason: Optional[str] = Field(default=None, description="模型选择原因说明")
-    model_name: Optional[str] = Field(default=None, description="当前消息使用的预测模型名称")
+    model_selection_reason: Optional[str] = Field(
+        default=None, description="模型选择原因说明"
+    )
+    model_name: Optional[str] = Field(
+        default=None, description="当前消息使用的预测模型名称"
+    )
 
     # 思考日志 (累积显示所有 LLM 调用的原始输出)
     thinking_logs: List[ThinkingLogEntry] = Field(default_factory=list)
@@ -241,6 +282,7 @@ class SessionData(BaseModel):
 
     存储全局信息和消息列表，每个消息的详细数据在 MessageData 中
     """
+
     # 基础信息
     session_id: str
     title: str = "New Chat"  # 会话标题，默认为首条消息摘要
@@ -260,15 +302,22 @@ class SessionData(BaseModel):
 
 # ========== API 请求/响应模型 ==========
 
+
 class CreateAnalysisRequest(BaseModel):
     """创建分析任务请求"""
+
     message: str = Field(..., description="用户问题")
-    session_id: str = Field(..., description="会话ID（必填，通过 POST /api/sessions 创建）")
-    model: Optional[str] = Field(default=None, description="预测模型，None 表示自动选择")
+    session_id: str = Field(
+        ..., description="会话ID（必填，通过 POST /api/sessions 创建）"
+    )
+    model: Optional[str] = Field(
+        default=None, description="预测模型，None 表示自动选择"
+    )
 
 
 class AnalysisStatusResponse(BaseModel):
     """分析状态响应"""
+
     session_id: str
     message_id: str
     status: MessageStatus
@@ -279,19 +328,22 @@ class AnalysisStatusResponse(BaseModel):
 
 # ========== 新闻相关模型 ==========
 
+
 class NewsItem(BaseModel):
     """原始新闻条目 (合并前)"""
+
     title: str
     content: str
     url: str
-    published_date: str     # 格式化后的时间，如 "01-16 14:00"
-    source_type: str        # "search" | "domain_info"
-    source_name: str = ""   # 来源名称，如 "东方财富"、"新浪财经"
+    published_date: str  # 格式化后的时间，如 "01-16 14:00"
+    source_type: str  # "search" | "domain_info"
+    source_name: str = ""  # 来源名称，如 "东方财富"、"新浪财经"
     score: float = 0.0
 
 
 class NewsSummaryResult(BaseModel):
     """新闻总结结果"""
+
     summary_text: str
     news_items: List[SummarizedNewsItem]
     total_before_dedup: int
@@ -300,23 +352,30 @@ class NewsSummaryResult(BaseModel):
 
 # ========== Backtest API Models ==========
 
+
 class BacktestRequest(BaseModel):
     """
     回测请求模型
 
     用于交互式时间旅行回测功能
     """
+
     session_id: str = Field(description="会话ID")
     message_id: str = Field(description="消息ID")
     split_date: str = Field(description="分割点日期 (ISO格式: YYYY-MM-DD)")
-    forecast_horizon: Optional[int] = Field(default=None, description="预测天数（可选，默认预测到原始数据末尾）")
+    forecast_horizon: Optional[int] = Field(
+        default=None, description="预测天数（可选，默认预测到原始数据末尾）"
+    )
 
 
 class BacktestMetrics(BaseModel):
     """回测指标"""
+
     mae: float = Field(description="平均绝对误差 (Mean Absolute Error)")
     rmse: float = Field(description="均方根误差 (Root Mean Squared Error)")
-    mape: float = Field(description="平均绝对百分比误差 (Mean Absolute Percentage Error)")
+    mape: float = Field(
+        description="平均绝对百分比误差 (Mean Absolute Percentage Error)"
+    )
     calculation_time_ms: int = Field(description="计算耗时（毫秒）")
 
 
@@ -329,6 +388,7 @@ class BacktestResponse(BaseModel):
         backtest_data: 回测预测结果
         ground_truth: 实际历史数据（用于对比）
     """
+
     metrics: BacktestMetrics
     backtest_data: List[TimeSeriesPoint] = Field(description="回测预测结果")
     ground_truth: List[TimeSeriesPoint] = Field(description="实际历史数据")
