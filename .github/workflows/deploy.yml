@@ -45,7 +45,7 @@ jobs:
           TAVILY_API_KEY=${{ secrets.TAVILY_API_KEY }}
           HF_TOKEN=${{ secrets.HF_TOKEN }}
           TAVILY_API_KEY=${{ secrets.TAVILY_API_KEY }}
-          RAG_SERVICE_URL=10.139.197.230:28000
+          RAG_SERVICE_URL=${{ secrets.RAG_SERVICE_IP }}:28000
           HOST=0.0.0.0
           PORT=8000
           REDIS_HOST=localhost
@@ -53,11 +53,11 @@ jobs:
           REDIS_PASSWORD=
           REDIS_DB=0
           REDIS_KEY_PREFIX=stock:
-          MONGODB_HOST=10.139.197.230
+          MONGODB_HOST=${{ secrets.MONGODB_HOST }}
           MONGODB_PORT=27017
-          MONGODB_USERNAME=xiaoyi_user
-          MONGODB_PASSWORD=ACTact123@buaa#
-          MONGODB_DATABASE=xiaoyi_db
+          MONGODB_USERNAME=${{ secrets.MONGODB_USERNAME }}
+          MONGODB_PASSWORD=${{ secrets.MONGODB_PASSWORD }}
+          MONGODB_DATABASE=${{ secrets.MONGODB_DATABASE }}
 
           EOF
           
