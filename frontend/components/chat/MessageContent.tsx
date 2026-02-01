@@ -1657,6 +1657,7 @@ function InteractiveChart({ content }: { content: ChartContent }) {
                 />
                 <Line
                   type="monotone"
+                  dataKey="回测预测"
                   stroke="#06b6d4"
                   strokeWidth={2.5}
                   dot={false}
