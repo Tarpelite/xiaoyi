@@ -6,11 +6,11 @@ from typing import Optional, List
 from pydantic import BaseModel
 
 MONGO_CONFIG = {
-    "host": os.getenv("MONGODB_HOST", "localhost"),
+    "host": os.getenv("MONGODB_HOST", "10.139.197.230"),
     "port": int(os.getenv("MONGODB_PORT", "27017")),
-    "username": os.getenv("MONGODB_USERNAME", "root"),
-    "password": os.getenv("MONGODB_PASSWORD", "admin"),
-    "database": os.getenv("MONGODB_DATABASE", "EastMoneyGubaNews"),
+    "username": os.getenv("MONGODB_USERNAME", "xiaoyi_user"),
+    "password": os.getenv("MONGODB_PASSWORD", "ACTact123@buaa#"),
+    "database": os.getenv("MONGODB_DATABASE", "xiaoyi_db"),
     "collection": os.getenv("MONGODB_COLLECTION", "stock_news"),
 }
 
