@@ -43,12 +43,11 @@ jobs:
           cat > backend/.env << EOF
           DEEPSEEK_API_KEY=${{ secrets.DEEPSEEK_API_KEY }}
           TAVILY_API_KEY=${{ secrets.TAVILY_API_KEY }}
-          HF_TOKEN=${{ secrets.HF_TOKEN }}
-          TAVILY_API_KEY=${{ secrets.TAVILY_API_KEY }}
-          RAG_SERVICE_URL=${{ secrets.RAG_SERVICE_IP }}:28000
+          HF_TOKEN=
+          RAG_SERVICE_URL=http://${{ secrets.RAG_SERVICE_IP }}:28000
           HOST=0.0.0.0
           PORT=8000
-          REDIS_HOST=localhost
+          REDIS_HOST=redis
           REDIS_PORT=6379
           REDIS_PASSWORD=
           REDIS_DB=0
