@@ -45,18 +45,20 @@ jobs:
           TAVILY_API_KEY=${{ secrets.TAVILY_API_KEY }}
           HF_TOKEN=${{ secrets.HF_TOKEN }}
           TAVILY_API_KEY=${{ secrets.TAVILY_API_KEY }}
+          RAG_SERVICE_URL=10.139.197.230:28000
           HOST=0.0.0.0
           PORT=8000
-          RAG_SERVICE_URL=${{ secrets.RAG_SERVICE_URL }}
-          REDIS_HOST=redis
+          REDIS_HOST=localhost
           REDIS_PORT=6379
+          REDIS_PASSWORD=
           REDIS_DB=0
-          RAG_SERVICE_URL=http://{{ secrets.RAG_SERVICE_IP }}:8000
-          MONGODB_HOST=localhost
+          REDIS_KEY_PREFIX=stock:
+          MONGODB_HOST=10.139.197.230
           MONGODB_PORT=27017
-          MONGODB_USERNAME = "xiaoyi_user"
-          MONGODB_PASSWORD = "ACTact123@buaa#"
-          MONGODB_DATABASE = "xiaoyi_db"
+          MONGODB_USERNAME=xiaoyi_user
+          MONGODB_PASSWORD=ACTact123@buaa#
+          MONGODB_DATABASE=xiaoyi_db
+
           EOF
           
           echo "📝 NEXT_PUBLIC_API_URL=http://${{ steps.ip.outputs.SERVER_IP }}:18000"

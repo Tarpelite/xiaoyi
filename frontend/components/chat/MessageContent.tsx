@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useMemo, useRef, useCallback, useEffect, Fragment } from 'react'
+import { createPortal } from 'react-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -37,6 +38,20 @@ function preprocessMarkdown(text: string): string {
 
 
 
+
+
+const PortalTooltip = ({ children, style }: { children: React.ReactNode, style?: React.CSSProperties }) => {
+  const [mounted, setMounted] = useState(false)
+  useEffect(() => {
+    setMounted(true)
+    return () => setMounted(false)
+  }, [])
+  if (!mounted) return null
+  return createPortal(
+    <div style={{ position: 'fixed', zIndex: 9999, ...style }}>{children}</div>,
+    document.body
+  )
+}
 
 // AlgoSelect Component
 const AlgoSelect: React.FC<{ label: string; value: string; options: { label: string; value: string }[]; onChange: (v: string) => void }> = ({ label, value, options, onChange }) => (
@@ -510,11 +525,13 @@ function InteractiveChart({ content }: { content: ChartContent }) {
   // 图表容器引用
   const chartContainerRef = useRef<HTMLDivElement>(null)
   const [mouseY, setMouseY] = useState<number | null>(null) // 鼠标相对于绘图区域的Y坐标（像素）
-  const [plotAreaBounds, setPlotAreaBounds] = useState<{ top: number; height: number } | null>(null) // 绘图区域边界
+  const [mouseX, setMouseX] = useState<number | null>(null) // 鼠标相对于绘图区域的X坐标（像素）
+  const [plotAreaBounds, setPlotAreaBounds] = useState<{ top: number; height: number; left: number; width: number } | null>(null) // 绘图区域边界
 
   // 滑块拖拽状态
   const [isDraggingSlider, setIsDraggingSlider] = useState(false)
   const [tempSplitDate, setTempSplitDate] = useState<string | null>(null) // 拖拽时的临时分割日期
+  const [activeCoordinateX, setActiveCoordinateX] = useState<number | null>(null); // Visual X for perfect alignment
 
   // 计算当前显示的数据
   const displayData = useMemo(() => {
@@ -816,7 +833,9 @@ function InteractiveChart({ content }: { content: ChartContent }) {
     }
   }, [viewStartIndex])
 
-  // 鼠标移动拖拽
+  // Throttled mouse move safe ref
+  const lastUpdateRef = useRef(0);
+
   const handleMouseMove = useCallback((e: MouseEvent) => {
     if (!isDragging || !chartContainerRef.current) return
 
@@ -954,7 +973,7 @@ function InteractiveChart({ content }: { content: ChartContent }) {
 
         const plotTop = marginTop
         const plotHeight = containerRect.height - marginTop - marginBottom - legendHeight
-        setPlotAreaBounds({ top: plotTop, height: plotHeight })
+        setPlotAreaBounds({ top: plotTop, height: plotHeight, left: 60, width: containerRect.width - 60 })
         return
       }
 
@@ -967,9 +986,11 @@ function InteractiveChart({ content }: { content: ChartContent }) {
       const plotTop = yAxisRect.top - containerRect.top
       const plotBottom = xAxisRect.top - containerRect.top
       const plotHeight = plotBottom - plotTop
+      const plotLeft = yAxisRect.width  // Approximate, or use yAxisRect.right - containerRect.left
+      const plotWidth = xAxisRect.width
 
       if (plotHeight > 0) {
-        setPlotAreaBounds({ top: plotTop, height: plotHeight })
+        setPlotAreaBounds({ top: plotTop, height: plotHeight, left: plotLeft, width: plotWidth })
       }
     }
 
@@ -996,6 +1017,11 @@ function InteractiveChart({ content }: { content: ChartContent }) {
     if (!container || !plotAreaBounds) return
 
     const handleMouseMove = (e: MouseEvent) => {
+      // Throttle: 60ms (~16fps) to prevent chart lag during drag
+      const now = Date.now();
+      if (now - lastUpdateRef.current < 60) return;
+      lastUpdateRef.current = now;
+
       const containerRect = container.getBoundingClientRect()
       const mouseYRelativeToContainer = e.clientY - containerRect.top
 
@@ -1003,26 +1029,57 @@ function InteractiveChart({ content }: { content: ChartContent }) {
       const plotAreaTop = plotAreaBounds.top
       const plotAreaBottom = plotAreaTop + plotAreaBounds.height
 
-      if (mouseYRelativeToContainer >= plotAreaTop && mouseYRelativeToContainer <= plotAreaBottom) {
+      // Slider Dragging Logic
+      if (isDraggingSlider && displayData && displayData.length > 0) {
+        const xInPlot = (e.clientX - containerRect.left) - plotAreaBounds.left;
+        const ratio = Math.max(0, Math.min(1, xInPlot / plotAreaBounds.width));
+        const index = Math.round(ratio * (displayData.length - 1));
+        const item = displayData[index];
+        if (item) {
+          setTempSplitDate(item.name);
+        }
+      } else if (mouseYRelativeToContainer >= plotAreaTop && mouseYRelativeToContainer <= plotAreaBottom) {
         // 计算相对于绘图区域顶部的坐标
         const yInPlotArea = mouseYRelativeToContainer - plotAreaTop
         setMouseY(yInPlotArea)
+        setMouseX(e.clientX - containerRect.left) // Store X for tooltip positioning
       } else {
         // 鼠标不在绘图区域内，不显示虚线
         setMouseY(null)
       }
     }
 
-    const handleMouseLeave = () => setMouseY(null)
+    const handleMouseLeave = () => {
+      setMouseY(null);
+      setMouseX(null);
+      setActiveZone(null);
+      if (isDraggingSlider) {
+        setIsDraggingSlider(false); // Auto-drop slider if leaving container
+        setTempSplitDate(null);
+      }
+    }
+
+    // MouseUp to commit slider change
+    const handleMouseUpContainer = () => {
+      if (isDraggingSlider) {
+        setIsDraggingSlider(false);
+        if (tempSplitDate) {
+          backtest.triggerBacktest(tempSplitDate);
+        }
+        setTempSplitDate(null);
+      }
+    }
 
     container.addEventListener('mousemove', handleMouseMove)
     container.addEventListener('mouseleave', handleMouseLeave)
+    container.addEventListener('mouseup', handleMouseUpContainer)
 
     return () => {
       container.removeEventListener('mousemove', handleMouseMove)
       container.removeEventListener('mouseleave', handleMouseLeave)
+      container.removeEventListener('mouseup', handleMouseUpContainer)
     }
-  }, [plotAreaBounds])
+  }, [plotAreaBounds, lastUpdateRef, isDraggingSlider, displayData, tempSplitDate, backtest])
 
   // 重置视图
   const handleReset = useCallback(() => {
@@ -1051,13 +1108,38 @@ function InteractiveChart({ content }: { content: ChartContent }) {
   // 如果标题包含"预测"，则不显示（因为外层已有"价格走势分析"标题）
   const shouldShowTitle = title && !title.includes('预测')
 
+  // Memoize Ticks to prevent re-calculation on every render/drag
+  const memoizedTicks = useMemo(() => {
+    if (isZoomed) return undefined;
+    // ALWAYS use visibleZones (Raw Intervals) as requested by user, even in Semantic Mode
+    const sourceZones = visibleZones || [];
+    if (!sourceZones) return undefined;
+
+    // Extract dates from zones (start/end)
+    const dates = sourceZones.flatMap((z: any) => [z.startDate, z.endDate]);
+
+    return Array.from(new Set(dates)).filter(d => displayData.some((p: any) => p.name === d)).sort();
+  }, [isZoomed, visibleZones, displayData]);
+
   // ------------------------------------------------------------------
   // Memoized Chart Elements to prevent Jitter
   // ------------------------------------------------------------------
 
   // 1. Semantic Zones (Areas)
   const semanticZoneElements = useMemo(() => {
-    if (!useSemanticRegimes) return null;
+    if (!useSemanticRegimes || !displayData || displayData.length === 0) return null;
+
+    // Helper to clamp dates to visible range to ensure rendering
+    const visibleStartName = displayData[0].name as string;
+    const visibleEndName = displayData[displayData.length - 1].name as string;
+
+    // We need indices to compare order because dates are strings
+    // chartData contains all data in order
+    const getIndex = (name: string) => chartData.findIndex((d: any) => d.name === name);
+
+    const visibleStartIndex = viewStartIndex; // optimization: use existing state
+    const visibleEndIndex = viewEndIndex;
+
     return semanticRegimes.map((regime: any, idx: number) => {
       const sentiment = regime.sentiment || regime.displayType;
       const isPositive = sentiment === 'positive' || sentiment === 'up';
@@ -1068,22 +1150,58 @@ function InteractiveChart({ content }: { content: ChartContent }) {
       const baseOpacity = isPrediction ? 0.15 : (isSideways ? 0.2 : 0.3);
       const uniqueKey = `regime-area-${regime.startDate}-${idx}`;
 
+      // Clamp logic
+      const rStartIdx = getIndex(regime.startDate);
+      const rEndIdx = getIndex(regime.endDate);
+
+      // If completely out of view, skip
+      if (rEndIdx < visibleStartIndex || rStartIdx > visibleEndIndex) return null;
+
+      // Clamp start/end to visible view
+      const clampStartIdx = Math.max(rStartIdx, visibleStartIndex);
+      const clampEndIdx = Math.min(rEndIdx, visibleEndIndex);
+
+      const x1 = chartData[clampStartIdx]?.name;
+      const x2 = chartData[clampEndIdx]?.name;
+
+      if (!x1 || !x2) return null;
+
+      // Re-calculate return rate based on visible chart data for accuracy
+      const startPoint = chartData[clampStartIdx];
+      const endPoint = chartData[clampEndIdx];
+      let displayRate = regime.totalChange;
+
+      // Try to calculate dynamic return
+      if (startPoint && endPoint) {
+        // Use the first available price key (History or Prediction)
+        const getVal = (p: any) => p['历史价格'] ?? p['实际值'] ?? p['预测价格'] ?? p['close'];
+        const sv = getVal(startPoint);
+        const ev = getVal(endPoint);
+        if (typeof sv === 'number' && typeof ev === 'number' && sv !== 0) {
+          const rate = (ev - sv) / sv;
+          displayRate = (rate >= 0 ? '+' : '') + (rate * 100).toFixed(2) + '%';
+        }
+      }
+
       return (
         <ReferenceArea
           key={uniqueKey}
-          x1={regime.startDate}
-          x2={regime.endDate}
+          x1={x1}
+          x2={x2}
           fill={fill}
           fillOpacity={baseOpacity}
           stroke={isPrediction ? fill : "none"}
           strokeDasharray={isPrediction ? "5 5" : undefined}
           className="cursor-pointer hover:opacity-80 transition-opacity"
-          onMouseEnter={() => setActiveZone(regime)}
-          onMouseLeave={() => setActiveZone(null)}
-        // onClick removed to allow chart click (news) to pass through
+          onMouseEnter={() => {
+            if (!isDraggingSlider && activeZone !== regime) setActiveZone(regime);
+          }}
+          onMouseLeave={() => {
+            if (!isDraggingSlider && activeZone === regime) setActiveZone(null);
+          }}
         >
           <Label
-            value={regime.totalChange}
+            value={displayRate} // Use re-calculated rate
             position="insideTop"
             fill={fill}
             fontSize={10}
@@ -1092,7 +1210,7 @@ function InteractiveChart({ content }: { content: ChartContent }) {
         </ReferenceArea>
       );
     });
-  }, [useSemanticRegimes, semanticRegimes]);
+  }, [useSemanticRegimes, semanticRegimes, displayData, viewStartIndex, viewEndIndex, chartData]);
 
   // 2. Anomaly Lookup Map (Faster Access)
   const anomalyMap = useMemo(() => {
@@ -1108,7 +1226,7 @@ function InteractiveChart({ content }: { content: ChartContent }) {
     const { cx, cy, fill, className, onMouseEnter, onMouseLeave, onClick } = props;
     return (
       <g transform={`translate(${cx}, ${cy})`} className={className}
-        onMouseEnter={onMouseEnter} onMouseLeave={onMouseLeave} onClick={onClick}
+        onMouseEnter={onMouseLeave} onMouseLeave={onMouseLeave} onClick={onClick}
         style={{ pointerEvents: 'all', cursor: 'pointer' }}
       >
         <line x1="0" y1="0" x2="0" y2="-12" stroke="#9ca3af" strokeWidth="1.5" />
@@ -1197,19 +1315,46 @@ function InteractiveChart({ content }: { content: ChartContent }) {
         }
       }
 
+      // Clamp to current view if needed (for Zooming)
+      // If the zone is partially visible, we must ensure start/end are within displayData for rendering?
+      // Actually Recharts XAxis scale="point" might require points to exist in the current dataKey list.
+      // If zoomed, displayData is subset.
+      // Check if start/end are in displayData.
+      if (displayData.length > 0) {
+        const firstVisible = displayData[0].name;
+        const lastVisible = displayData[displayData.length - 1].name;
+
+        // Simple string comparison for dates works YYYY-MM-DD
+        if (zone.endDate < firstVisible) return null;
+        if (displayStartDate > lastVisible) return null;
+
+        // Clamp
+        if (displayStartDate < firstVisible) displayStartDate = firstVisible;
+        // We don't change zone.endDate if it exceeds lastVisible usually, ReferenceArea handles one side?
+        // But for "point" scale, value MUST be in domain.
+        if (zone.endDate > lastVisible) {
+          // We can't assign to zone.endDate directly (prop).
+          // But we can use clamped value for ReferenceArea x2
+        }
+      }
+
       return (
         <ReferenceArea
           key={uniqueKey}
           x1={displayStartDate}
-          x2={zone.endDate}
+          x2={zone.endDate > displayData[displayData.length - 1]?.name ? displayData[displayData.length - 1]?.name : zone.endDate}
           fill={zoneColor.fill}
           fillOpacity={impact * 0.8}
           stroke={zoneColor.stroke}
           strokeOpacity={impact}
           strokeDasharray={isCalm ? '5 5' : undefined}
-          onMouseEnter={() => setActiveZone(zone)}
-          onMouseLeave={() => setActiveZone(null)}
-          // onClick removed
+          onMouseEnter={() => {
+            // Optimization: Only update if changed and not dragging
+            if (!isDraggingSlider && activeZone !== zone) setActiveZone(zone);
+          }}
+          onMouseLeave={() => {
+            if (!isDraggingSlider && activeZone === zone) setActiveZone(null);
+          }}
           className="cursor-pointer transition-all duration-300"
         />
       );
@@ -1261,20 +1406,7 @@ function InteractiveChart({ content }: { content: ChartContent }) {
           {shouldShowTitle && (
             <h4 className="text-sm font-medium text-gray-300">{title}</h4>
           )}
-
-          {/* Semantic Toggle Button - Always show if we have zones */}
-          {(semantic_zones.length > 0 || anomalyZones.length > 0) && (
-            <button
-              onClick={() => setUseSemanticRegimes(!useSemanticRegimes)}
-              className={`flex items-center justify-center w-8 h-8 rounded-lg transition-colors border ${useSemanticRegimes
-                ? 'bg-purple-500/20 text-purple-400 border-purple-500/30'
-                : 'text-gray-400 border-white/5 hover:bg-white/5'
-                }`}
-              title="切换语义化行情视角"
-            >
-              <Sparkles className="w-4 h-4" />
-            </button>
-          )}
+          {/* Toggle Button Removed as requested */}
         </div>
 
         <div className="flex items-center gap-2">
@@ -1321,6 +1453,12 @@ function InteractiveChart({ content }: { content: ChartContent }) {
             data={displayData}
             margin={{ top: 5, right: 10, left: 0, bottom: 20 }}
             onClick={handleChartClick}
+            onMouseMove={(state: any) => {
+              if (state && state.activeCoordinate) {
+                // Recharts provides x relative to the plot area
+                setActiveCoordinateX(state.activeCoordinate.x);
+              }
+            }}
           >
             <CartesianGrid strokeDasharray="3 3" stroke="#3a3a4a" />
             <XAxis
@@ -1330,12 +1468,31 @@ function InteractiveChart({ content }: { content: ChartContent }) {
               angle={isZoomed ? -45 : 0}
               textAnchor={isZoomed ? "end" : "middle"}
               height={isZoomed ? 60 : 30}
+              padding={{ left: 0, right: 0 }}
+              scale="point" // CRITICAL: Ensures points are on ticks, matching slider math
+              // Use explicit ticks from visible zones start/end for major ticks
+              ticks={memoizedTicks as (string | number)[] | undefined}
+              minTickGap={30}
+              interval="preserveStartEnd"
+              tick={({ x, y, payload }) => (
+                <g transform={`translate(${x},${y})`}>
+                  {/* Short vertical line above axis (upwards) - Explicitly inside chart, High Contrast */}
+                  <line x1={0} y1={0} x2={0} y2={-10} stroke="#ffffff" strokeWidth={2} strokeOpacity={0.6} />
+                  {/* Rotated text to prevent overlap */}
+                  <text x={0} y={20} dy={0} textAnchor="end" transform={`rotate(-45, 0, 20)`} fill="#9ca3af" fontSize={10} fontFamily="monospace">
+                    {payload.value}
+                  </text>
+                </g>
+              )}
+              tickLine={false} // Hide default tick line
             />
+
             <YAxis
               stroke="#6b7280"
               style={{ fontSize: '12px' }}
               domain={yAxisDomain}
               allowDataOverflow={false}
+              padding={{ top: 10, bottom: 10 }} // Add separate padding here if needed instead of domain math
               tickFormatter={(value) => {
                 // 格式化 Y 轴刻度标签，处理大数值
                 if (isNaN(value) || !isFinite(value)) {
@@ -1358,32 +1515,9 @@ function InteractiveChart({ content }: { content: ChartContent }) {
               width={60}
             />
             <Tooltip
-              content={(props: any) => {
-                // If activeZone exists, we show custom tooltip (outside chart), so hide default one
-                if (activeZone) return null;
-
-                // Default Recharts Tooltip styling
-                const { active, payload, label } = props;
-                if (active && payload && payload.length) {
-                  return (
-                    <div className="bg-[#1a1a24] border border-white/10 rounded-lg p-3 shadow-xl">
-                      <p className="text-gray-400 text-xs mb-2">{label}</p>
-                      {payload.map((entry: any, index: number) => {
-                        if (entry.value === null || entry.value === undefined || isNaN(entry.value)) return null;
-                        const displayValue = typeof entry.value === 'number' ? entry.value.toFixed(2) : entry.value;
-                        return (
-                          <div key={index} className="flex items-center gap-2 text-sm">
-                            <span className="w-2 h-2 rounded-full" style={{ backgroundColor: entry.color }} />
-                            <span className="text-gray-300">{entry.name}:</span>
-                            <span className="font-mono text-white">{displayValue}</span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  );
-                }
-                return null;
-              }}
+              content={() => null}
+              cursor={{ stroke: 'rgba(255,255,255,0.2)', strokeWidth: 1, strokeDasharray: '3 3' }}
+              isAnimationActive={false}
             />
             <Legend
               wrapperStyle={{ fontSize: '12px' }}
@@ -1419,21 +1553,81 @@ function InteractiveChart({ content }: { content: ChartContent }) {
             })()}
 
             {/* 5. Backtest Split Line */}
-            {((hasBacktestSupport && backtest.splitDate) || (isDraggingSlider && tempSplitDate)) && (() => {
-              const splitDate = (isDraggingSlider && tempSplitDate) ? tempSplitDate : backtest.splitDate
-              if (!splitDate) return null
-              const splitDataPoint = displayData.find((item: any) => item.name === splitDate)
-              if (splitDataPoint) {
-                return (
+            {/* 5. Backtest Split Line & Slider Handle (Unified) */}
+            {(() => {
+              // 1. Determine the Split Date
+              let targetDate = isDraggingSlider && tempSplitDate ? tempSplitDate : backtest.splitDate;
+
+              // 2. Auto-detect logic if no explicit date (e.g. Prediction Mode default)
+              if (!targetDate && chartData && chartData.length > 1) {
+                // Try to find the transition point from '历史价格' to '预测价格'
+                // We assume sorted data. We look for the first point that has Prediction but previous had History (or just first prediction).
+                for (let i = 0; i < chartData.length - 1; i++) {
+                  const current = chartData[i];
+                  const next = chartData[i + 1];
+                  const currHist = (current as any)['历史价格'];
+                  const nextPred = (next as any)['预测价格'];
+
+                  // If current is end of history, and next starts prediction
+                  if (currHist !== null && currHist !== undefined && nextPred !== null && nextPred !== undefined) {
+                    targetDate = next.name as string;
+                    break;
+                  }
+                }
+
+                // Fallback: If no clean crossover, just take first point with prediction?
+                if (!targetDate) {
+                  const firstPred = chartData.find((d: any) => (d as any)['预测价格'] !== null);
+                  if (firstPred) targetDate = firstPred.name as string;
+                }
+              }
+
+              if (!targetDate) return null;
+
+              // 3. Visibility Check (Must be in current displayData to render)
+              const isVisible = displayData.some((d: any) => d.name === targetDate);
+              if (!isVisible) return null;
+
+              return (
+                <>
                   <ReferenceLine
-                    x={splitDate}
+                    x={targetDate}
                     stroke="#f97316"
                     strokeWidth={2}
                     strokeDasharray="4 2"
                   />
-                )
-              }
-              return null
+                  <ReferenceDot
+                    x={targetDate}
+                    y={yAxisDomain[0]}
+                    r={8}
+                    isFront={true}
+                    shape={(props: any) => {
+                      const { cx } = props;
+                      // Calculate bottom of chart area
+                      const chartBottom = plotAreaBounds
+                        ? plotAreaBounds.top + plotAreaBounds.height
+                        : (props.viewBox ? props.viewBox.y + props.viewBox.height : 300);
+
+                      return (
+                        <g
+                          style={{ cursor: 'ew-resize' }}
+                          onMouseDown={(e: any) => {
+                            e.stopPropagation();
+                            e.preventDefault();
+                            setIsDraggingSlider(true);
+                          }}
+                        >
+                          {/* Touch Target */}
+                          <circle cx={cx} cy={chartBottom} r={15} fill="transparent" />
+                          {/* Handle visual */}
+                          <circle cx={cx} cy={chartBottom} r={8} fill="#f97316" stroke="white" strokeWidth={2} />
+                          <circle cx={cx} cy={chartBottom} r={3} fill="white" />
+                        </g>
+                      );
+                    }}
+                  />
+                </>
+              );
             })()}
 
             {/* 6. Chart Lines */}
@@ -1445,7 +1639,7 @@ function InteractiveChart({ content }: { content: ChartContent }) {
                   stroke="#a855f7"
                   strokeWidth={2}
                   dot={false}
-                  activeDot={{ r: 6, fill: '#818cf8', stroke: '#312e81', strokeWidth: 2 }}
+                  activeDot={{ r: 6, fill: '#0c0c0c', stroke: '#a855f7', strokeWidth: 2 }}
                   isAnimationActive={false}
                   name="历史价格"
                 />
@@ -1455,42 +1649,43 @@ function InteractiveChart({ content }: { content: ChartContent }) {
                   stroke="#6b7280"
                   strokeWidth={2}
                   strokeDasharray="5 5"
-                  dot={{ r: 2 }}
-                  activeDot={{ r: 4 }}
+                  dot={false}
+                  activeDot={{ r: 6, fill: '#0c0c0c', stroke: '#6b7280', strokeWidth: 2 }}
                   connectNulls={false}
-                  isAnimationActive={false}
+                  isAnimationActive={false} // Performance critical for drag
                   name="实际值 (Ground Truth)"
                 />
                 <Line
                   type="monotone"
-                  dataKey="回测预测"
                   stroke="#06b6d4"
                   strokeWidth={2.5}
-                  dot={{ r: 3 }}
-                  activeDot={{ r: 5 }}
-                  connectNulls={false}
-                  isAnimationActive={false}
+                  dot={false}
+                  activeDot={{ r: 6, fill: '#0c0c0c', stroke: '#06b6d4', strokeWidth: 2 }}
+                  isAnimationActive={false} // Prevents "growing" effect on re-render
                   name="回测预测"
                 />
               </>
             ) : (
-              data.datasets.map((dataset: any, index: any) => (
-                <Line
-                  key={dataset.label}
-                  type="monotone"
-                  dataKey={dataset.label}
-                  stroke={dataset.color}
-                  strokeWidth={2}
-                  dot={false}
-                  activeDot={{ r: 6, strokeWidth: 2 }}
-                  isAnimationActive={false}
-                  connectNulls={false}
-                />
-              ))
+              data.datasets.map((dataset: any, index: any) => {
+                const isPrediction = dataset.label === '预测价格';
+                return (
+                  <Line
+                    key={dataset.label}
+                    type="monotone"
+                    dataKey={dataset.label}
+                    stroke={dataset.color}
+                    strokeWidth={2}
+                    dot={false}
+                    activeDot={isPrediction ? false : { r: 6, strokeWidth: 2 }} // Disable dots for prediction
+                    isAnimationActive={false}
+                    connectNulls={false}
+                  />
+                )
+              })
             )}
 
-            {/* 7. Semantic Event Dots (Memoized) */}
-            {semanticEventElements}
+            {/* 7. Semantic Event Dots (Removed legacy yellow dots) */}
+            {/* {semanticEventElements} */}
 
             {/* 8. Anomaly Flags (Top Row) */}
             {anomalyFlagElements}
@@ -1510,373 +1705,155 @@ function InteractiveChart({ content }: { content: ChartContent }) {
           </LineChart>
         </ResponsiveContainer>
 
-        {/* X 轴滑块 - 明显的滑块圆点 */}
-        {((hasBacktestSupport && originalData && originalData.length > 60) || (data.datasets.some((d: any) => d.label === '历史价格') && data.datasets.some((d: any) => d.label === '预测价格'))) && plotAreaBounds && (() => {
-          // 计算分割点：拖拽时使用临时日期，否则使用回测分割点或历史价格和预测价格的分界点
-          let splitDate = isDraggingSlider && tempSplitDate ? tempSplitDate : backtest.splitDate
-          let splitIndexInChart = -1
+        {/* Slider Logic Moved Here (Outside SVG/ResponsiveContainer) */}
 
-          if (splitDate) {
-            // 回测模式：使用指定的分割点
-            splitIndexInChart = chartData.findIndex((item: any) => item.name === splitDate)
-          } else {
-            // 正常模式：查找历史价格和预测价格的分界点
-            // 找到最后一个有历史价格值的点，下一个点就是预测价格的起点
-            for (let i = chartData.length - 1; i >= 0; i--) {
-              const item = chartData[i]
-              const historicalPrice = (item as any)['历史价格']
-              if (historicalPrice !== null && historicalPrice !== undefined) {
-                // 找到下一个有预测价格的点作为分界点
-                if (i + 1 < chartData.length) {
-                  const nextItem = chartData[i + 1]
-                  const predictedPrice = (nextItem as any)['预测价格']
-                  if (predictedPrice !== null && predictedPrice !== undefined) {
-                    splitIndexInChart = i + 1
-                    splitDate = nextItem.name as string
-                    break
-                  }
-                }
-                // 如果没有找到预测价格，使用当前点
-                if (splitIndexInChart < 0) {
-                  splitIndexInChart = i
-                  splitDate = item.name as string
-                  break
-                }
-              }
-            }
-          }
 
-          if (!splitDate || splitIndexInChart < 0) return null
 
-          // 检查是否在当前显示范围内
-          const isInView = splitIndexInChart >= viewStartIndex && splitIndexInChart <= viewEndIndex
-
-          // 计算位置比例（相对于当前显示的 displayData）
-          // 需要找到分割日期在 displayData 中的索引，而不是在 chartData 中的索引
-          let positionRatio = 0
-          const splitIndexInDisplayData = displayData.findIndex((item: any) => item.name === splitDate)
-
-          if (splitIndexInDisplayData >= 0) {
-            // 在显示数据中找到，计算位置比例
-            const displayDataLength = displayData.length
-            // Recharts 的 X 轴是均匀分布的，所以位置比例就是索引比例
-            // 但需要考虑第一个和最后一个点的位置（它们不在边缘，而是在中间）
-            if (displayDataLength > 1) {
-              positionRatio = splitIndexInDisplayData / (displayDataLength - 1)
-            } else {
-              positionRatio = 0
-            }
-          } else if (isDraggingSlider) {
-            // 拖拽时，即使不在显示数据中，也根据位置计算显示
-            if (splitIndexInChart < viewStartIndex) {
-              positionRatio = 0 // 在视图左侧
-            } else {
-              positionRatio = 1 // 在视图右侧
-            }
-          } else {
-            // 不在显示数据中且不在拖拽，不显示
-            return null
-          }
-
-          // X 轴位置
-          // plotAreaBounds.top + plotAreaBounds.height 是绘图区域的底部，也就是 X 轴线的位置
-          // 滑块圆点应该直接显示在 X 轴线上
-          const xAxisLineTop = plotAreaBounds.top + plotAreaBounds.height
-          // 滑块圆点在 X 轴线上，所以顶部位置是 X 轴线位置减去圆点半径（8px）以居中
-          const sliderTop = xAxisLineTop - 8
-
-          return (
-            <>
-              {/* 滑块圆点容器 - 覆盖绘图区域 */}
-              <div
-                className="absolute pointer-events-none z-30"
-                style={{
-                  left: '60px', // Y 轴宽度
-                  right: '10px', // 右侧边距
-                  top: `${sliderTop}px`, // X 轴线位置（减去圆点半径以居中）
-                  height: '16px'
-                }}
-              >
-                {/* 滑块圆点 - 在 X 轴上明显显示，支持拖拽 */}
-                <div
-                  className="absolute pointer-events-auto group"
-                  style={{
-                    left: `${positionRatio * 100}%`, // 在绘图区域内的位置比例
-                    transform: 'translateX(-50%)', // 居中对齐
-                    width: '16px',
-                    height: '16px'
-                  }}
-                  onMouseDown={(e) => {
-                    e.stopPropagation() // 阻止触发图表拖拽
-                    e.preventDefault()
-                    const container = chartContainerRef.current
-                    if (!container) return
-
-                    // 开始拖拽
-                    setIsDraggingSlider(true)
-
-                    const updateSplitPoint = (clientX: number, isFinal: boolean = false) => {
-                      const svg = container.querySelector('svg')
-                      if (!svg) return
-
-                      const svgRect = svg.getBoundingClientRect()
-                      const plotLeft = svgRect.left
-                      const plotWidth = svgRect.width
-
-                      // 计算鼠标在绘图区域内的位置比例
-                      const mouseX = clientX - plotLeft
-                      const positionRatio = Math.max(0, Math.min(1, mouseX / plotWidth))
-
-                      // 计算对应的数据点索引
-                      const viewRange = viewEndIndex - viewStartIndex + 1
-                      const relativeIndex = Math.round(positionRatio * viewRange)
-                      const targetIndex = viewStartIndex + relativeIndex
-
-                      // 找到对应的日期
-                      if (targetIndex >= 0 && targetIndex < chartData.length && originalData) {
-                        const targetDate = chartData[targetIndex].name
-                        if (typeof targetDate === 'string') {
-                          const originalIndex = originalData.findIndex((p: any) => p.date === targetDate)
-                          if (originalIndex >= 60 && originalIndex < originalData.length) {
-                            if (isFinal) {
-                              // 释放鼠标时才触发回测更新
-                              backtest.triggerBacktest(targetDate)
-                              setIsDraggingSlider(false)
-                              setTempSplitDate(null)
-                            } else {
-                              // 拖拽过程中只更新临时日期，用于显示滑块位置
-                              setTempSplitDate(targetDate)
-                            }
-                          }
-                        }
-                      }
-                    }
-
-                    const handleMouseMove = (e: MouseEvent) => {
-                      updateSplitPoint(e.clientX, false) // 拖拽中，不触发回测
-                    }
-
-                    const handleMouseUp = (e: MouseEvent) => {
-                      updateSplitPoint(e.clientX, true) // 释放时，触发回测
-                      window.removeEventListener('mousemove', handleMouseMove)
-                      window.removeEventListener('mouseup', handleMouseUp)
-                    }
-
-                    // 立即更新一次（拖拽开始）
-                    updateSplitPoint(e.clientX, false)
-
-                    // 绑定全局事件以支持拖拽
-                  }}
-                >
-                  {/* 滑块圆点 - 大而明显 */}
-                  {/* Main Chart Area */}
-
-                  <div className="w-full h-full bg-orange-400 rounded-full shadow-xl shadow-orange-400/50 border-2 border-orange-300 cursor-grab active:cursor-grabbing hover:scale-125 hover:shadow-orange-400/70 transition-all duration-200 flex items-center justify-center">
-                    {/* 内部白点 */}
-                    <div className="w-2 h-2 bg-white/90 rounded-full" />
-                  </div>
-
-                  {/* 日期标签 - 悬停时显示 */}
-                  <div className="absolute top-full left-1/2 transform -translate-x-1/2 mt-2 px-2 py-1 text-xs text-orange-300 bg-dark-800/95 backdrop-blur-sm rounded-md border border-orange-400/40 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none shadow-lg">
-                    {splitDate}
-                  </div>
-                </div>
-              </div>
-
-              {/* 滑块交互区域 - 覆盖 X 轴区域，支持拖拽 */}
-              <div
-                className="absolute cursor-pointer z-20"
-                style={{
-                  left: '60px', // Y 轴宽度
-                  right: '10px', // 右侧边距
-                  top: `${xAxisLineTop - 10}px`, // X 轴线上方一点，方便交互
-                  height: `20px` // 交互区域高度，覆盖 X 轴线及其附近区域
-                }}
-                onMouseDown={(e) => {
-                  e.stopPropagation()
-                  const container = chartContainerRef.current
-                  if (!container) return
-
-                  // 开始拖拽
-                  setIsDraggingSlider(true)
-
-                  const updateSplitPoint = (clientX: number, isFinal: boolean = false) => {
-                    const svg = container.querySelector('svg')
-                    if (!svg) return
-
-                    const svgRect = svg.getBoundingClientRect()
-                    const plotLeft = svgRect.left
-                    const plotWidth = svgRect.width
-
-                    // 计算鼠标在绘图区域内的位置比例
-                    const mouseX = clientX - plotLeft
-                    const positionRatio = Math.max(0, Math.min(1, mouseX / plotWidth))
-
-                    // 计算对应的数据点索引
-                    const viewRange = viewEndIndex - viewStartIndex + 1
-                    const relativeIndex = Math.round(positionRatio * viewRange)
-                    const targetIndex = viewStartIndex + relativeIndex
-
-                    // 找到对应的日期
-                    if (targetIndex >= 0 && targetIndex < chartData.length && originalData) {
-                      const targetDate = chartData[targetIndex].name
-                      if (typeof targetDate === 'string') {
-                        const originalIndex = originalData.findIndex((p: any) => p.date === targetDate)
-                        if (originalIndex >= 60 && originalIndex < originalData.length) {
-                          if (isFinal) {
-                            // 释放鼠标时才触发回测更新
-                            backtest.triggerBacktest(targetDate)
-                            setIsDraggingSlider(false)
-                            setTempSplitDate(null)
-                          } else {
-                            // 拖拽过程中只更新临时日期，用于显示滑块位置
-                            setTempSplitDate(targetDate)
-                          }
-                        }
-                      }
-                    }
-                  }
-
-                  const handleMouseMove = (e: MouseEvent) => {
-                    updateSplitPoint(e.clientX, false) // 拖拽中，不触发回测
-                  }
-
-                  const handleMouseUp = (e: MouseEvent) => {
-                    updateSplitPoint(e.clientX, true) // 释放时，触发回测
-                    window.removeEventListener('mousemove', handleMouseMove)
-                    window.removeEventListener('mouseup', handleMouseUp)
-                  }
-
-                  // 立即更新一次（拖拽开始）
-                  updateSplitPoint(e.clientX, false)
-
-                  // 绑定全局事件以支持拖拽
-                  window.addEventListener('mousemove', handleMouseMove)
-                  window.addEventListener('mouseup', handleMouseUp)
-                }}
-              >
-                {/* 悬停提示 - 轻微高亮 */}
-                <div className="absolute inset-0 opacity-0 hover:opacity-[0.02] bg-orange-400 transition-opacity pointer-events-none" />
-              </div>
-            </>
-          )
-        })()}
       </div>
 
-      {isZoomed && (
-        <div className="mt-2 text-xs text-gray-500 text-center">
-          当前视图：{chartData[viewStartIndex]?.name} 至 {chartData[viewEndIndex]?.name}
-          ({viewEndIndex - viewStartIndex + 1} / {chartData.length} 个数据点)
-        </div>
-      )}
 
-      {/* 异常区悬浮卡片 */}
+      {
+        isZoomed && (
+          <div className="mt-2 text-xs text-gray-500 text-center">
+            当前视图：{chartData[viewStartIndex]?.name} 至 {chartData[viewEndIndex]?.name}
+            ({viewEndIndex - viewStartIndex + 1} / {chartData.length} 个数据点)
+          </div>
+        )
+      }
+
       <AnimatePresence>
         {/* Event Capsule - Bloomberg 风格事件摘要 */}
         {(() => {
-          // console.log('[TOOLTIP CHECK] activeZone:', activeZone);
-          // console.log('[TOOLTIP CHECK] useSemanticRegimes:', useSemanticRegimes);
-          // console.log('[TOOLTIP CHECK] events:', activeZone?.events);
-          return activeZone && useSemanticRegimes && activeZone.events && activeZone.events.length > 0;
-        })() && (
-            <div className="absolute top-16 left-1/2 -translate-x-1/2 z-50
-                        bg-[#020203]/95 border border-white/10 backdrop-blur-md
-                        px-4 py-3 rounded-lg shadow-2xl min-w-[320px] max-w-lg max-h-[400px] overflow-y-auto
-                        animate-in fade-in-from-top-2 duration-200"
-              style={{ scrollbarWidth: 'thin', scrollbarColor: 'rgba(255,255,255,0.3) transparent', pointerEvents: 'none' }}>
+          const shouldShow = activeZone && useSemanticRegimes && activeZone.events && activeZone.events.length > 0;
+          if (!shouldShow) return null;
 
-              {/* Header: Total Change & Effect */}
-              <div className="flex items-center justify-between mb-3 border-b border-white/5 pb-2 sticky top-0 bg-[#020203]/95 z-10">
-                <div className="flex items-center gap-2">
-                  {(activeZone.impact || 0) > 0.7 && (
-                    <span className="text-lg animate-pulse" title="High Impact">✨</span>
-                  )}
-                  <span className={`text-xs px-2 py-0.5 rounded font-mono font-bold border ${(activeZone.avg_return || 0) >= 0
-                    ? 'bg-red-500/10 text-red-400 border-red-500/20'
-                    : 'bg-green-500/10 text-green-400 border-green-500/20'
-                    }`}>
-                    {((activeZone.avg_return || 0) >= 0 ? '+' : '')}
-                    {((activeZone.avg_return || 0) * 100).toFixed(1)}%
-                  </span>
-                  <span className="text-xs text-white/40 font-mono">
-                    {activeZone.startDate} ~ {activeZone.endDate}
-                  </span>
+          // Calculate Fixed Position
+          const container = chartContainerRef.current;
+          if (!container) return null;
+          const rect = container.getBoundingClientRect();
+
+          // Position: Right of mouse if space allows, otherwise Left.
+          const top = rect.top + (mouseY || 20) + 20;
+          const left = rect.left + (mouseX || 60) + 20;
+
+          return (
+            <PortalTooltip style={{ top, left, pointerEvents: 'none' }}>
+              <motion.div
+                initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                transition={{ duration: 0.2 }}
+                className="bg-black/90 border border-white/10 backdrop-blur-md
+                        px-4 py-3 rounded-lg shadow-2xl min-w-[320px] max-w-lg"
+              >
+
+                {/* Header: Total Change & Effect */}
+                <div className="flex flex-col gap-1 w-full mb-3 border-b border-white/5 pb-2 sticky top-0 bg-[#020203]/95 z-10">
+                  {/* Row 1: Zone Info */}
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      {(activeZone.impact || 0) > 0.7 && (
+                        <span className="text-lg animate-pulse" title="High Impact">✨</span>
+                      )}
+                      <span className={`text-xs px-2 py-0.5 rounded font-mono font-bold border ${(activeZone.avg_return || 0) >= 0
+                        ? 'bg-red-500/10 text-red-400 border-red-500/20'
+                        : 'bg-green-500/10 text-green-400 border-green-500/20'
+                        }`}>
+                        {((activeZone.avg_return || 0) >= 0 ? '+' : '')}
+                        {((activeZone.avg_return || 0) * 100).toFixed(1)}%
+                      </span>
+                      <span className="text-xs text-white/40 font-mono">
+                        {activeZone.startDate} ~ {activeZone.endDate}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Row 2: Hovered Price Info (Separate Row) */}
+                  <div className="w-full mt-2 pt-2 border-t border-white/10">
+                    {(() => {
+                      // Calculate current price based on mouseX
+                      if (mouseX !== null && plotAreaBounds) {
+                        const ratio = (mouseX - plotAreaBounds.left) / plotAreaBounds.width;
+                        const idx = Math.round(ratio * (displayData.length - 1));
+                        const safeIdx = Math.max(0, Math.min(idx, displayData.length - 1));
+                        const item = displayData[safeIdx];
+                        if (item) {
+                          const price = item['历史价格'] ?? item['回测预测'] ?? item['实际值'];
+                          const date = item.name;
+                          return (
+                            <div className="flex justify-between items-center text-xs w-full">
+                              <span className="text-gray-400 font-mono">{date}</span>
+                              <div className="flex items-center gap-2">
+                                <span className="text-gray-500">当前价格:</span>
+                                <span className="text-violet-400 font-bold font-mono text-sm"> {/* Increased font size */}
+                                  {typeof price === 'number' ? price.toFixed(2) : '-'}
+                                </span>
+                              </div>
+                            </div>
+                          )
+                        }
+                      }
+                      return null;
+                    })()}
+                  </div>
                 </div>
-              </div>
 
-              <div className="space-y-4 pt-2">
-                <div className="text-[10px] text-white/40 uppercase tracking-widest font-bold flex items-center gap-2">
-                  <span className="w-1.5 h-1.5 rounded-full bg-purple-400 animate-pulse"></span>
-                  Event Flow
-                </div>
-                <div className="relative pl-1">
-                  {/* Timeline Line */}
-                  <div className="absolute left-[3px] top-1 bottom-1 w-px bg-gradient-to-b from-white/20 via-white/10 to-transparent"></div>
+                <div className="space-y-4 pt-2">
+                  <div className="text-[10px] text-white/40 uppercase tracking-widest font-bold flex items-center gap-2">
+                    <span className="w-1.5 h-1.5 rounded-full bg-purple-400 animate-pulse"></span>
+                    Event Flow
+                  </div>
+                  <div className="relative pl-1">
+                    {/* Timeline Line */}
+                    <div className="absolute left-[3px] top-1 bottom-1 w-px bg-gradient-to-b from-white/20 via-white/10 to-transparent"></div>
 
-                  {activeZone.events.map((ev: any, idx: number) => (
-                    <div key={idx} className="relative pl-5 py-1 mb-2 group">
-                      {/* Timeline Dot */}
-                      <div className={`absolute left-0 top-2.5 w-[7px] h-[7px] rounded-full border border-black/50 transition-colors duration-300 ${(ev.avg_return || ((ev.endPrice - ev.startPrice) / ev.startPrice)) >= 0
-                        ? 'bg-red-400 group-hover:bg-red-300'
-                        : 'bg-green-400 group-hover:bg-green-300'
-                        }`}></div>
+                    {activeZone.events.map((ev: any, idx: number) => (
+                      <div key={idx} className="relative pl-5 py-1 mb-2 group">
+                        {/* Timeline Dot */}
+                        <div className={`absolute left-0 top-2.5 w-[7px] h-[7px] rounded-full border border-black/50 transition-colors duration-300 ${(ev.avg_return || ((ev.endPrice - ev.startPrice) / ev.startPrice)) >= 0
+                          ? 'bg-red-400 group-hover:bg-red-300'
+                          : 'bg-green-400 group-hover:bg-green-300'
+                          }`}></div>
 
-                      {/* Content Card */}
-                      <div className="flex flex-col">
-                        <div className="flex items-center justify-between mb-0.5">
-                          <span className="text-[10px] text-gray-500 font-mono">{ev.startDate}</span>
-                          <span className={`text-[10px] font-bold font-mono px-1 rounded ${(ev.avg_return || ((ev.endPrice - ev.startPrice) / ev.startPrice)) >= 0
-                            ? 'text-red-400 bg-red-400/10'
-                            : 'text-green-400 bg-green-400/10'
-                            }`}>
-                            {((ev.avg_return !== undefined ? ev.avg_return : ((ev.endPrice - ev.startPrice) / ev.startPrice)) * 100).toFixed(1)}%
-                          </span>
-                        </div>
-                        <div className="text-xs text-gray-200 leading-snug font-medium group-hover:text-white transition-colors">
-                          {ev.summary || ev.event_summary || ev.type?.toUpperCase() || 'Event'}
+                        {/* Content Card */}
+                        <div className="flex flex-col">
+                          <div className="flex items-center justify-between mb-0.5">
+                            <span className="text-[10px] text-gray-500 font-mono">{ev.startDate}</span>
+                            <span className={`text-[10px] font-bold font-mono px-1 rounded ${(ev.avg_return !== undefined ? ev.avg_return : ((ev.endPrice - ev.startPrice) / ev.startPrice)) >= 0
+                              ? 'text-red-400 bg-red-400/10'
+                              : 'text-green-400 bg-green-400/10'
+                              }`}>
+                              {((ev.avg_return !== undefined ? ev.avg_return : ((ev.endPrice - ev.startPrice) / ev.startPrice)) * 100).toFixed(1)}%
+                            </span>
+                          </div>
+                          <div className="text-xs text-gray-200 leading-snug font-medium group-hover:text-white transition-colors">
+                            {ev.summary || ev.event_summary || ev.type?.toUpperCase() || 'Event'}
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  ))}
+                    ))}
+                  </div>
                 </div>
-              </div>
-            </div>
-          )}
-
-        {/* 原有的简单悬浮提示（Raw Zone Tooltip OR Fallback for zones without events/anomalies） */}
-        {activeZone && (!activeZone.events || activeZone.events.length === 0) && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.1 }}
-            className="absolute top-4 left-1/2 transform -translate-x-1/2 z-50" style={{ pointerEvents: 'none' }}
-          >
-            <div className="glass rounded-xl p-3 shadow-2xl max-w-md border border-white/10">
-              <div className="flex items-center justify-between mb-2">
-                <div className="flex items-center gap-2">
-                  <div className={`w-2 h-2 rounded-full ${activeZone.sentiment === 'positive' ? 'bg-green-500' : activeZone.sentiment === 'negative' ? 'bg-red-500' : 'bg-violet-500'}`} />
-                  <span className="text-gray-400 text-xs">{activeZone.startDate} - {activeZone.endDate}</span>
-                </div>
-              </div>
-              <p className="text-gray-200 text-sm leading-relaxed">{activeZone.summary || activeZone.event_summary || '暂无描述'}</p>
-            </div>
-          </motion.div>
-        )}
+              </motion.div>
+            </PortalTooltip>
+          );
+        })()}
       </AnimatePresence>
 
       {/* 新闻侧边栏 */}
-      {ticker && (
-        <ChartNewsSidebar
-          isOpen={newsSidebarOpen}
-          onClose={handleCloseSidebar}
-          news={newsData}
-          loading={newsLoading}
-          selectedDate={selectedDate}
-          ticker={ticker}
-        />
-      )}
-    </div>
+      {
+        ticker && (
+          <ChartNewsSidebar
+            isOpen={newsSidebarOpen}
+            onClose={handleCloseSidebar}
+            news={newsData}
+            loading={newsLoading}
+            selectedDate={selectedDate}
+            ticker={ticker}
+          />
+        )
+      }
+    </div >
   )
 }
 

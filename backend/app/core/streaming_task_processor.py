@@ -660,6 +660,11 @@ class StreamingTaskProcessor:
                     start_p = seg.get("startPrice", seg.get("avgPrice", 1.0))
                     end_p = seg.get("endPrice", seg.get("avgPrice", 1.0))
 
+                    # NEW: Try to use actual prices from raw data if available (passed via args or lookup)
+                    # We don't have price_map easily accessible here without passing it into process_semantic_regimes
+                    # But anomaly_segments usually come from significant point detection which uses raw data.
+                    # For now, trust the segment data but ensure 0 handling.
+
                     change_pct = (end_p - start_p) / start_p if start_p else 0
 
                     anomaly_zones.append(
@@ -886,57 +891,76 @@ class StreamingTaskProcessor:
                         collection_name = os.getenv("MONGODB_COLLECTION", "stock_news")
                         news_collection = mongo_client[db_name][collection_name]
 
-                        # Process RAW anomaly zones for individual event summaries
-                        for zone in anomaly_zones:
-                            start = zone["startDate"]
-                            end = zone["endDate"]
+                        # define helper function for parallel execution
+                        def process_single_zone(zone):
+                            try:
+                                start = zone["startDate"]
+                                end = zone["endDate"]
 
-                            # 使用正则表达式查询区域内的新闻
-                            zone_dates = []
-                            current = datetime.strptime(start, "%Y-%m-%d")
-                            end_dt = datetime.strptime(end, "%Y-%m-%d")
-                            while current <= end_dt:
-                                zone_dates.append(current.strftime("%Y-%m-%d"))
-                                current += timedelta(days=1)
+                                # 使用正则表达式查询区域内的新闻
+                                zone_dates = []
+                                current = datetime.strptime(start, "%Y-%m-%d")
+                                end_dt = datetime.strptime(end, "%Y-%m-%d")
+                                while current <= end_dt:
+                                    zone_dates.append(current.strftime("%Y-%m-%d"))
+                                    current += timedelta(days=1)
 
-                            # 从MongoDB查询这些日期的所有内容（资讯、研报、公告）
-                            regex_pattern = "^(" + "|".join(zone_dates) + ")"
-                            zone_news_cursor = news_collection.find(
-                                {
-                                    "stock_code": stock_code,
-                                    "publish_time": {"$regex": regex_pattern},
-                                    # 不过滤content_type，包含所有类型
-                                }
-                            ).limit(20)  # 增加到20条以覆盖更多内容类型
-
-                            zone_news_dicts = []
-                            for news_doc in zone_news_cursor:
-                                zone_news_dicts.append(
+                                # 从MongoDB查询这些日期的所有内容
+                                regex_pattern = "^(" + "|".join(zone_dates) + ")"
+                                zone_news_cursor = news_collection.find(
                                     {
-                                        "title": news_doc.get("title", ""),
-                                        "content_type": news_doc.get(
-                                            "content_type", "资讯"
-                                        ),
-                                        "publish_time": news_doc.get(
-                                            "publish_time", ""
-                                        ),
+                                        "stock_code": stock_code,
+                                        "publish_time": {"$regex": regex_pattern},
                                     }
+                                ).limit(20)
+
+                                zone_news_dicts = []
+                                for news_doc in zone_news_cursor:
+                                    zone_news_dicts.append(
+                                        {
+                                            "title": news_doc.get("title", ""),
+                                            "content_type": news_doc.get(
+                                                "content_type", "资讯"
+                                            ),
+                                            "publish_time": news_doc.get(
+                                                "publish_time", ""
+                                            ),
+                                        }
+                                    )
+
+                                # 使用Agent生成摘要
+                                event_summary = event_agent.summarize_zone(
+                                    zone_dates=zone_dates,
+                                    price_change=zone.get("avg_return", 0) * 100,
+                                    news_items=zone_news_dicts,
                                 )
+                                return zone, event_summary
+                            except Exception as e:
+                                print(
+                                    f"[AnomalyZones] Error processing zone {zone.get('startDate')}: {e}"
+                                )
+                                return zone, None
 
-                            # 使用Agent生成摘要
-                            event_summary = event_agent.summarize_zone(
-                                zone_dates=zone_dates,
-                                price_change=zone.get("avg_return", 0) * 100,
-                                news_items=zone_news_dicts,
-                            )
+                        # Use ThreadPoolExecutor for parallel processing
+                        import concurrent.futures
 
-                            zone["event_summary"] = event_summary
-                            zone["summary"] = (
-                                event_summary  # Also set as summary for consistency
-                            )
-                            print(
-                                f"[AnomalyZones] Zone {start}-{end} ({len(zone_news_dicts)} news): {event_summary}"
-                            )
+                        with concurrent.futures.ThreadPoolExecutor(
+                            max_workers=5
+                        ) as executor:
+                            future_to_zone = {
+                                executor.submit(process_single_zone, zone): zone
+                                for zone in anomaly_zones
+                            }
+                            for future in concurrent.futures.as_completed(
+                                future_to_zone
+                            ):
+                                zone, event_summary = future.result()
+                                if event_summary:
+                                    zone["event_summary"] = event_summary
+                                    zone["summary"] = event_summary
+                                    print(
+                                        f"[AnomalyZones] Zone {zone['startDate']}-{zone['endDate']} summarized"
+                                    )
 
                     finally:
                         if mongo_client:
