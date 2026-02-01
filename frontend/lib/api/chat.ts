@@ -1,5 +1,5 @@
 // API 基础URL
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || ''
 
 // 获取快速追问建议
 export async function getSuggestions(sessionId?: string | null): Promise<string[]> {

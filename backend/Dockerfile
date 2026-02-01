@@ -1,16 +1,15 @@
-# 使用官方 uv 镜像提供二进制文件
+# 使用官方 uv 镜像作为构建阶段
 FROM astral-sh/uv:latest AS uv_bin
 
 # 基础镜像
-FROM aqtbrodh2awvkc.xuanyuan.run/python:3.11-slim
+FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     TZ=Asia/Shanghai \
-    # 关键：告诉 uv 将包安装到系统 site-packages，而不是创建虚拟环境
-    UV_SYSTEM_PYTHON=1 
+    UV_SYSTEM_PYTHON=1
 
-# 复制 uv 二进制文件到当前镜像
+# 复制 uv 二进制文件
 COPY --from=uv_bin /uv /uvx /bin/
 
 # 配置 apt 使用阿里云镜像并安装系统依赖
@@ -22,24 +21,26 @@ RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debia
 
 WORKDIR /app
 
-# 1. 只复制依赖声明文件（利用 Docker 缓存）
-# 如果你本地执行了 uv add，建议复制 pyproject.toml 和 uv.lock
-# 如果还没切换，可以继续用 requirements.txt
-COPY backend/requirements.txt .
+# 复制项目依赖配置
+COPY backend/pyproject.toml backend/uv.lock* ./
 
-# 2. 使用 uv 极速安装
-# --index-url 依然可以使用阿里云，但 uv 本身已经非常快
-RUN uv pip install --no-cache -r requirements.txt \
-    --index-url https://mirrors.aliyun.com/pypi/simple/
+# 安装依赖
+# 注意：由于 pyproject.toml 可能被手动修改，这里不强制 --frozen
+# uv sync 会创建 .venv，CMD 使用 uv run 调用
+RUN uv sync --no-install-project
 
 # 复制业务代码
 COPY backend/app ./app
 COPY backend/scripts ./scripts
 
+# 复制环境变量文件 (User requested)
+COPY backend/.env* ./
+
 EXPOSE 8000
 
-# 健康检查保持不变
+# 健康检查
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# 使用 uv run 启动
+CMD ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

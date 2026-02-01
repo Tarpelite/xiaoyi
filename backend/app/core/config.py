@@ -1,37 +1,72 @@
 import os
+from typing import List, Optional
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from pathlib import Path
-from dotenv import load_dotenv
 
-# Load .env file from backend directory
-backend_dir = Path(__file__).parent.parent.parent
-env_path = backend_dir / ".env"
-load_dotenv(env_path)
+# Load .env settings are handled by pydantic, but we can set the default location
+BACKEND_DIR = Path(__file__).parent.parent.parent
+ENV_PATH = BACKEND_DIR / ".env"
+
+# Restore load_dotenv for libraries/scripts relying on os.environ
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(ENV_PATH)
+except ImportError:
+    pass
 
 
-class Settings:
-    """Application settings"""
+class Settings(BaseSettings):
+    """
+    Application settings using pydantic-settings
 
-    # API Keys
-    DEEPSEEK_API_KEY: str = os.getenv("DEEPSEEK_API_KEY", "")
-    TAVILY_API_KEY: str = os.getenv("TAVILY_API_KEY", "")
+    Reads configuration from .env file or environment variables.
+    No sensible defaults are hardcoded here to ensure security and flexibility.
+    """
 
-    # Server settings
-    HOST: str = os.getenv("HOST", "0.0.0.0")
-    PORT: int = int(os.getenv("PORT", "8000"))
+    # Model Config to load .env file
+    model_config = SettingsConfigDict(
+        env_file=ENV_PATH,
+        env_file_encoding="utf-8",
+        extra="ignore",  # Identify extra fields in .env as ok
+        case_sensitive=True,
+    )
+
+    # API Keys (Required)
+    DEEPSEEK_API_KEY: str
+    TAVILY_API_KEY: str
+
+    # Server settings (Optional with standard defaults or set in .env)
+    HOST: str = "0.0.0.0"
+    PORT: int = 8000
 
     # External Services
-    RAG_SERVICE_URL: str = os.getenv("RAG_SERVICE_URL", "")
+    RAG_SERVICE_URL: str
+
+    # Redis Settings
+    REDIS_HOST: str
+    REDIS_PORT: int = 6379  # Port usually safe to default but can be overridden
+    REDIS_PASSWORD: str = ""
+    REDIS_DB: int = 0
+    REDIS_KEY_PREFIX: str = "stock:"
+
+    # MongoDB Settings
+    MONGODB_HOST: str
+    MONGODB_PORT: int = 27017
+    MONGODB_USERNAME: str
+    MONGODB_PASSWORD: str
+    MONGODB_DATABASE: str
+    MONGODB_COLLECTION: str = "stock_news"
 
     # CORS settings
-    CORS_ORIGINS: list[str] = [
+    CORS_ORIGINS: List[str] = [
         "http://localhost:3000",
         "http://127.0.0.1:3000",
-        "http://localhost:3001",
     ]
 
     @property
     def api_key(self) -> str:
-        """Get API key, raise error if not set"""
+        """Get API key, raise error if not set (Legacy compat)"""
         if not self.DEEPSEEK_API_KEY:
             raise ValueError("DEEPSEEK_API_KEY not set in environment variables")
         return self.DEEPSEEK_API_KEY

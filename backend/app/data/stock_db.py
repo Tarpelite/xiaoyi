@@ -5,25 +5,18 @@ from pymongo import MongoClient
 from typing import Optional, List
 from pydantic import BaseModel
 
-MONGO_CONFIG = {
-    "host": os.getenv("MONGODB_HOST", "10.139.197.230"),
-    "port": int(os.getenv("MONGODB_PORT", "27017")),
-    "username": os.getenv("MONGODB_USERNAME", "xiaoyi_user"),
-    "password": os.getenv("MONGODB_PASSWORD", "ACTact123@buaa#"),
-    "database": os.getenv("MONGODB_DATABASE", "xiaoyi_db"),
-    "collection": os.getenv("MONGODB_COLLECTION", "stock_news"),
-}
+from app.core.config import settings
 
 
 def get_mongo_client():
     from urllib.parse import quote_plus
 
     # URL编码用户名和密码（处理特殊字符）
-    username = quote_plus(MONGO_CONFIG["username"])
-    password = quote_plus(MONGO_CONFIG["password"])
-    host = MONGO_CONFIG["host"]
-    port = MONGO_CONFIG["port"]
-    auth_db = MONGO_CONFIG["database"]
+    username = quote_plus(settings.MONGODB_USERNAME)
+    password = quote_plus(settings.MONGODB_PASSWORD)
+    host = settings.MONGODB_HOST
+    port = settings.MONGODB_PORT
+    auth_db = settings.MONGODB_DATABASE
 
     # 使用URL格式连接字符串
     mongo_uri = (

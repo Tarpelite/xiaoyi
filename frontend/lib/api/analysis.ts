@@ -146,7 +146,7 @@ export interface MessageData {
 // 兼容旧版类型别名
 export type AnalysisSessionData = MessageData
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || ''
 
 /**
  * 创建分析任务（后台独立运行）
@@ -427,7 +427,9 @@ export async function resumeStream(
   lastEventId?: string,
   signal?: AbortSignal
 ): Promise<{ completed: boolean; data?: MessageData }> {
-  let url = `${API_BASE_URL}/api/analysis/stream-resume/${sessionId}?message_id=${messageId}`
+  // SSE 在 Next.js Proxy 下可能存在缓冲问题，开发环境强制使用直连
+  const STREAM_BASE = process.env.NODE_ENV === 'development' ? 'http://localhost:8000' : API_BASE_URL
+  let url = `${STREAM_BASE}/api/analysis/stream-resume/${sessionId}?message_id=${messageId}`
   if (lastEventId) {
     url += `&last_event_id=${encodeURIComponent(lastEventId)}`
   }

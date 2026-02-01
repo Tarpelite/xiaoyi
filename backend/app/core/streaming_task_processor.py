@@ -7,7 +7,6 @@
 """
 
 import asyncio
-import os  # 用于读取环境变量
 import json
 import traceback
 from datetime import datetime, timedelta
@@ -582,7 +581,7 @@ class StreamingTaskProcessor:
                 print("\n" + "=" * 50)
 
                 print(
-                    f"\n📈 [ALGO 3/6] Bottom-Up PLR (Trend Lines): Found {len(trend_results.get('plr', []))} segments"
+                    f"\nBottom-Up PLR (Trend Lines): Found {len(trend_results.get('plr', []))} segments"
                 )
                 for i, seg in enumerate(trend_results.get("plr", [])[:3]):
                     print(
@@ -887,8 +886,11 @@ class StreamingTaskProcessor:
                     try:
                         mongo_client = get_mongo_client()
                         # 使用环境变量配置数据库和集合名称
-                        db_name = os.getenv("MONGODB_DATABASE", "EastMoneyGubaNews")
-                        collection_name = os.getenv("MONGODB_COLLECTION", "stock_news")
+                        # 使用环境变量配置数据库和集合名称
+                        from app.core.config import settings
+
+                        db_name = settings.MONGODB_DATABASE
+                        collection_name = settings.MONGODB_COLLECTION
                         news_collection = mongo_client[db_name][collection_name]
 
                         # define helper function for parallel execution
