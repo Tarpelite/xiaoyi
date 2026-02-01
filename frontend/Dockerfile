@@ -1,31 +1,26 @@
-# ============================================
-# 前端 Dockerfile - Next.js 多阶段构建
-# ============================================
-
 # Stage 1: 依赖安装
 FROM aqtbrodh2awvkc.xuanyuan.run/node:20-alpine AS deps
 
 # 配置 Alpine 使用阿里云镜像
 RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories
-
 RUN apk add --no-cache libc6-compat
 WORKDIR /app
 
-# 安装 pnpm 并配置淘宝镜像
-RUN corepack enable && corepack prepare pnpm@latest --activate
-RUN pnpm config set registry https://registry.npmmirror.com
+# 【修复点】直接使用 npm 安装 pnpm，并指定国内镜像
+RUN npm install -g pnpm --registry=https://registry.npmmirror.com
 
 # 复制依赖文件
 COPY frontend/package.json frontend/pnpm-lock.yaml ./
 
 # 安装依赖
-RUN pnpm install --frozen-lockfile
+RUN pnpm install --frozen-lockfile --registry=https://registry.npmmirror.com
 
 # Stage 2: 构建
 FROM aqtbrodh2awvkc.xuanyuan.run/node:20-alpine AS builder
 WORKDIR /app
 
-RUN corepack enable && corepack prepare pnpm@latest --activate
+# 【修复点】同样在构建阶段准备好 pnpm
+RUN npm install -g pnpm --registry=https://registry.npmmirror.com
 
 COPY --from=deps /app/node_modules ./node_modules
 COPY frontend/ .

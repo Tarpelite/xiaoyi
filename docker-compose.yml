@@ -42,6 +42,8 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
+    env_file:
+      - ./backend/.env
     container_name: xiaoyi-backend
     restart: unless-stopped
     ports:
