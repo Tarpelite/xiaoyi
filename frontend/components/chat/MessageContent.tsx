@@ -620,7 +620,9 @@ function InteractiveChart({ content }: { content: ChartContent }) {
           const semEnd = new Date(semanticZone.endDate).getTime();
 
           // Check if there's any overlap
-          return rawStart <= semEnd && rawEnd >= semStart;
+          // FIX: Strict check - Event must START within the semantic zone to be relevant
+          // This prevents historical events from appearing in future/prediction zones
+          return rawStart >= semStart && rawStart <= semEnd;
         });
 
         // Convert raw zones to event format for tooltip display
@@ -1133,9 +1135,20 @@ function InteractiveChart({ content }: { content: ChartContent }) {
     const visibleStartName = displayData[0].name as string;
     const visibleEndName = displayData[displayData.length - 1].name as string;
 
-    // We need indices to compare order because dates are strings
-    // chartData contains all data in order
-    const getIndex = (name: string) => chartData.findIndex((d: any) => d.name === name);
+    // Helper to find index covering the date range
+    const findApproxStartIndex = (targetDate: string) => {
+      // Find first date >= targetDate
+      const idx = chartData.findIndex((d: any) => d.name >= targetDate);
+      return idx === -1 ? chartData.length : idx; // If not found (all < target), return length (after end)
+    };
+
+    const findApproxEndIndex = (targetDate: string) => {
+      // Find last date <= targetDate
+      // Equivalent to: Find first date > targetDate, then subtract 1
+      const idx = chartData.findIndex((d: any) => d.name > targetDate);
+      if (idx === -1) return chartData.length - 1; // All <= target, so last one
+      return idx - 1;
+    };
 
     const visibleStartIndex = viewStartIndex; // optimization: use existing state
     const visibleEndIndex = viewEndIndex;
@@ -1150,9 +1163,12 @@ function InteractiveChart({ content }: { content: ChartContent }) {
       const baseOpacity = isPrediction ? 0.15 : (isSideways ? 0.2 : 0.3);
       const uniqueKey = `regime-area-${regime.startDate}-${idx}`;
 
-      // Clamp logic
-      const rStartIdx = getIndex(regime.startDate);
-      const rEndIdx = getIndex(regime.endDate);
+      // Robust Index Lookup
+      const rStartIdx = findApproxStartIndex(regime.startDate);
+      const rEndIdx = findApproxEndIndex(regime.endDate);
+
+      // If invalid range (start > end), skip
+      if (rStartIdx > rEndIdx) return null;
 
       // If completely out of view, skip
       if (rEndIdx < visibleStartIndex || rStartIdx > visibleEndIndex) return null;
@@ -1167,19 +1183,29 @@ function InteractiveChart({ content }: { content: ChartContent }) {
       if (!x1 || !x2) return null;
 
       // Re-calculate return rate based on visible chart data for accuracy
-      const startPoint = chartData[clampStartIdx];
-      const endPoint = chartData[clampEndIdx];
+      // FIX: Use robustly found start/end points to calculate fixed return rate
+      // independent of zoom level (unclamped indices)
+
       let displayRate = regime.totalChange;
 
-      // Try to calculate dynamic return
-      if (startPoint && endPoint) {
-        // Use the first available price key (History or Prediction)
-        const getVal = (p: any) => p['历史价格'] ?? p['实际值'] ?? p['预测价格'] ?? p['close'];
-        const sv = getVal(startPoint);
-        const ev = getVal(endPoint);
-        if (typeof sv === 'number' && typeof ev === 'number' && sv !== 0) {
-          const rate = (ev - sv) / sv;
-          displayRate = (rate >= 0 ? '+' : '') + (rate * 100).toFixed(2) + '%';
+      // If original totalChange is missing (N/A) due to strict lookup, recalc it
+      if (displayRate === 'N/A' || !displayRate) {
+        const safeStartIdx = Math.max(0, Math.min(rStartIdx, chartData.length - 1));
+        // rEndIdx can be -1 if before start, or length.
+        const safeEndIdx = Math.max(0, Math.min(rEndIdx, chartData.length - 1));
+
+        const startPoint = chartData[safeStartIdx];
+        const endPoint = chartData[safeEndIdx];
+
+        if (startPoint && endPoint) {
+          // Use the first available price key (History or Prediction)
+          const getVal = (p: any) => p['历史价格'] ?? p['实际值'] ?? p['预测价格'] ?? p['close'];
+          const sv = getVal(startPoint);
+          const ev = getVal(endPoint);
+          if (typeof sv === 'number' && typeof ev === 'number' && sv !== 0) {
+            const rate = (ev - sv) / sv;
+            displayRate = (rate >= 0 ? '+' : '') + (rate * 100).toFixed(2) + '%';
+          }
         }
       }
 
@@ -1382,6 +1408,9 @@ function InteractiveChart({ content }: { content: ChartContent }) {
             strokeWidth={1}
             className="cursor-pointer hover:r-6 transition-all"
             isFront={true}
+            // FIX: Disable pointer events to prevent tooltip flickering
+            // The Area underneath handles the hover for the tooltip capsule
+            style={{ pointerEvents: 'none' }}
           >
             <Label value="" />
           </ReferenceDot>
@@ -1677,7 +1706,7 @@ function InteractiveChart({ content }: { content: ChartContent }) {
                     stroke={dataset.color}
                     strokeWidth={2}
                     dot={false}
-                    activeDot={isPrediction ? false : { r: 6, strokeWidth: 2 }} // Disable dots for prediction
+                    activeDot={{ r: 6, strokeWidth: 2 }} // Enable dots for prediction too
                     isAnimationActive={false}
                     connectNulls={false}
                   />
@@ -1725,7 +1754,7 @@ function InteractiveChart({ content }: { content: ChartContent }) {
       <AnimatePresence>
         {/* Event Capsule - Bloomberg 风格事件摘要 */}
         {(() => {
-          const shouldShow = activeZone && useSemanticRegimes && activeZone.events && activeZone.events.length > 0;
+          const shouldShow = activeZone && useSemanticRegimes;
           if (!shouldShow) return null;
 
           // Calculate Fixed Position
@@ -1733,9 +1762,24 @@ function InteractiveChart({ content }: { content: ChartContent }) {
           if (!container) return null;
           const rect = container.getBoundingClientRect();
 
-          // Position: Right of mouse if space allows, otherwise Left.
-          const top = rect.top + (mouseY || 20) + 20;
-          const left = rect.left + (mouseX || 60) + 20;
+          // Position logic with boundary check
+          const tooltipWidth = 350; // Estimated width (min-w-[320px] + padding)
+          const viewportWidth = window.innerWidth;
+
+          const mouseAbsX = rect.left + (mouseX || 60);
+          const mouseAbsY = rect.top + (mouseY || 20);
+
+          // Default: Right of mouse
+          let left = mouseAbsX + 20;
+          let top = mouseAbsY + 20;
+
+          // If overflowing right edge, flip to left
+          if (left + tooltipWidth > viewportWidth) {
+            left = mouseAbsX - tooltipWidth - 20;
+          }
+
+          // Ensure it doesn't go off-screen to the left
+          if (left < 10) left = 10;
 
           return (
             <PortalTooltip style={{ top, left, pointerEvents: 'none' }}>
@@ -1756,12 +1800,12 @@ function InteractiveChart({ content }: { content: ChartContent }) {
                       {(activeZone.impact || 0) > 0.7 && (
                         <span className="text-lg animate-pulse" title="High Impact">✨</span>
                       )}
-                      <span className={`text-xs px-2 py-0.5 rounded font-mono font-bold border ${(activeZone.avg_return || 0) >= 0
+                      <span className={`text-xs px-2 py-0.5 rounded font-mono font-bold border ${(activeZone.avg_return !== undefined ? activeZone.avg_return : (parseFloat(activeZone.totalChange) / 100 || 0)) >= 0
                         ? 'bg-red-500/10 text-red-400 border-red-500/20'
                         : 'bg-green-500/10 text-green-400 border-green-500/20'
                         }`}>
-                        {((activeZone.avg_return || 0) >= 0 ? '+' : '')}
-                        {((activeZone.avg_return || 0) * 100).toFixed(1)}%
+                        {((activeZone.avg_return !== undefined ? activeZone.avg_return : (parseFloat(activeZone.totalChange) / 100 || 0)) >= 0 ? '+' : '')}
+                        {((activeZone.avg_return !== undefined ? activeZone.avg_return : (parseFloat(activeZone.totalChange) / 100 || 0)) * 100).toFixed(1)}%
                       </span>
                       <span className="text-xs text-white/40 font-mono">
                         {activeZone.startDate} ~ {activeZone.endDate}
@@ -1779,7 +1823,8 @@ function InteractiveChart({ content }: { content: ChartContent }) {
                         const safeIdx = Math.max(0, Math.min(idx, displayData.length - 1));
                         const item = displayData[safeIdx];
                         if (item) {
-                          const price = item['历史价格'] ?? item['回测预测'] ?? item['实际值'];
+                          // Dynamic price lookup - prioritize history, then backtest/truth, then generic prediction
+                          const price = item['历史价格'] ?? item['回测预测'] ?? item['实际值'] ?? item['预测价格'];
                           const date = item.name;
                           return (
                             <div className="flex justify-between items-center text-xs w-full">
@@ -1799,42 +1844,44 @@ function InteractiveChart({ content }: { content: ChartContent }) {
                   </div>
                 </div>
 
-                <div className="space-y-4 pt-2">
-                  <div className="text-[10px] text-white/40 uppercase tracking-widest font-bold flex items-center gap-2">
-                    <span className="w-1.5 h-1.5 rounded-full bg-purple-400 animate-pulse"></span>
-                    Event Flow
-                  </div>
-                  <div className="relative pl-1">
-                    {/* Timeline Line */}
-                    <div className="absolute left-[3px] top-1 bottom-1 w-px bg-gradient-to-b from-white/20 via-white/10 to-transparent"></div>
+                {activeZone.events && activeZone.events.length > 0 && (
+                  <div className="space-y-4 pt-2">
+                    <div className="text-[10px] text-white/40 uppercase tracking-widest font-bold flex items-center gap-2">
+                      <span className="w-1.5 h-1.5 rounded-full bg-purple-400 animate-pulse"></span>
+                      Event Flow
+                    </div>
+                    <div className="relative pl-1">
+                      {/* Timeline Line */}
+                      <div className="absolute left-[3px] top-1 bottom-1 w-px bg-gradient-to-b from-white/20 via-white/10 to-transparent"></div>
 
-                    {activeZone.events.map((ev: any, idx: number) => (
-                      <div key={idx} className="relative pl-5 py-1 mb-2 group">
-                        {/* Timeline Dot */}
-                        <div className={`absolute left-0 top-2.5 w-[7px] h-[7px] rounded-full border border-black/50 transition-colors duration-300 ${(ev.avg_return || ((ev.endPrice - ev.startPrice) / ev.startPrice)) >= 0
-                          ? 'bg-red-400 group-hover:bg-red-300'
-                          : 'bg-green-400 group-hover:bg-green-300'
-                          }`}></div>
+                      {activeZone.events.map((ev: any, idx: number) => (
+                        <div key={idx} className="relative pl-5 py-1 mb-2 group">
+                          {/* Timeline Dot */}
+                          <div className={`absolute left-0 top-2.5 w-[7px] h-[7px] rounded-full border border-black/50 transition-colors duration-300 ${(ev.avg_return || ((ev.endPrice - ev.startPrice) / ev.startPrice)) >= 0
+                            ? 'bg-red-400 group-hover:bg-red-300'
+                            : 'bg-green-400 group-hover:bg-green-300'
+                            }`}></div>
 
-                        {/* Content Card */}
-                        <div className="flex flex-col">
-                          <div className="flex items-center justify-between mb-0.5">
-                            <span className="text-[10px] text-gray-500 font-mono">{ev.startDate}</span>
-                            <span className={`text-[10px] font-bold font-mono px-1 rounded ${(ev.avg_return !== undefined ? ev.avg_return : ((ev.endPrice - ev.startPrice) / ev.startPrice)) >= 0
-                              ? 'text-red-400 bg-red-400/10'
-                              : 'text-green-400 bg-green-400/10'
-                              }`}>
-                              {((ev.avg_return !== undefined ? ev.avg_return : ((ev.endPrice - ev.startPrice) / ev.startPrice)) * 100).toFixed(1)}%
-                            </span>
-                          </div>
-                          <div className="text-xs text-gray-200 leading-snug font-medium group-hover:text-white transition-colors">
-                            {ev.summary || ev.event_summary || ev.type?.toUpperCase() || 'Event'}
+                          {/* Content Card */}
+                          <div className="flex flex-col">
+                            <div className="flex items-center justify-between mb-0.5">
+                              <span className="text-[10px] text-gray-500 font-mono">{ev.startDate}</span>
+                              <span className={`text-[10px] font-bold font-mono px-1 rounded ${(ev.avg_return !== undefined ? ev.avg_return : ((ev.endPrice - ev.startPrice) / ev.startPrice)) >= 0
+                                ? 'text-red-400 bg-red-400/10'
+                                : 'text-green-400 bg-green-400/10'
+                                }`}>
+                                {((ev.avg_return !== undefined ? ev.avg_return : ((ev.endPrice - ev.startPrice) / ev.startPrice)) * 100).toFixed(1)}%
+                              </span>
+                            </div>
+                            <div className="text-xs text-gray-200 leading-snug font-medium group-hover:text-white transition-colors">
+                              {ev.summary || ev.event_summary || ev.type?.toUpperCase() || 'Event'}
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    ))}
+                      ))}
+                    </div>
                   </div>
-                </div>
+                )}
               </motion.div>
             </PortalTooltip>
           );
