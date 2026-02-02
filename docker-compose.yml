@@ -10,7 +10,7 @@ services:
       - redis_data:/data
     command: redis-server --appendonly yes
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: [ "CMD", "redis-cli", "ping" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -24,13 +24,16 @@ services:
       context: .
       dockerfile: frontend/Dockerfile
       args:
-        - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:18000}
+        # 构建时注入公网地址，供浏览器使用
+        - NEXT_PUBLIC_API_URL=http://${SERVER_IP}:18000
     container_name: xiaoyi-frontend
     restart: unless-stopped
     ports:
       - "13000:3000"
     environment:
       - NODE_ENV=production
+      # 关键修复：让 route.ts 在服务端通过容器名访问后端
+      - API_BASE_URL=http://backend:8000
     depends_on:
       backend:
         condition: service_healthy
@@ -65,7 +68,7 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" ]
       interval: 30s
       timeout: 10s
       retries: 3
