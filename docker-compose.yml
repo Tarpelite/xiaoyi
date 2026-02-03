@@ -14,7 +14,6 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 10s
     networks:
       - xiaoyi-network
 
@@ -24,16 +23,18 @@ services:
       context: .
       dockerfile: frontend/Dockerfile
       args:
-        # 构建时注入公网地址，供浏览器使用
-        - NEXT_PUBLIC_API_URL=http://${SERVER_IP}:18000
+        # 将宿主机的 SERVER_IP 注入镜像构建过程
+        - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
     container_name: xiaoyi-frontend
     restart: unless-stopped
     ports:
       - "13000:3000"
     environment:
       - NODE_ENV=production
-      # 关键修复：让 route.ts 在服务端通过容器名访问后端
+      # 用于 Next.js 服务端接口转发，直接走 Docker 内部网络
       - API_BASE_URL=http://backend:8000
+      # 运行时环境变量（可选，用于验证）
+      - NEXT_PUBLIC_API_URL=http://${SERVER_IP}:18000
     depends_on:
       backend:
         condition: service_healthy
@@ -52,11 +53,8 @@ services:
     ports:
       - "18000:8000"
     environment:
-      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
-      - TAVILY_API_KEY=${TAVILY_API_KEY}
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-      - REDIS_DB=0
       - TZ=Asia/Shanghai
       # 外部 RAG 服务
       - RAG_SERVICE_URL=${RAG_SERVICE_URL}
