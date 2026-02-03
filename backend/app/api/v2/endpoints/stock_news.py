@@ -1,12 +1,11 @@
-import os
 import json
 from datetime import datetime, timedelta
 from typing import List, Optional, Any
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from app.core.redis_client import get_redis
+from app.core.config import settings
 from app.data.stock_db import (
-    MONGO_CONFIG,
     get_mongo_client,
     ensure_mongodb_indexes,
     NewsItem,
@@ -14,7 +13,7 @@ from app.data.stock_db import (
 
 router = APIRouter()
 
-REDIS_KEY_PREFIX = os.getenv("REDIS_KEY_PREFIX", "stock:")
+REDIS_KEY_PREFIX = settings.REDIS_KEY_PREFIX
 
 
 def make_redis_key(key_type: str, ticker: str, **kwargs) -> str:
@@ -208,7 +207,7 @@ async def get_stock_events(
     client = None
     try:
         client = get_mongo_client()
-        db = client[MONGO_CONFIG["database"]]
+        db = client[settings.MONGODB_DATABASE]
 
         # Ensure index exists for efficient queries
         ensure_mongodb_indexes(db, code)
@@ -430,10 +429,10 @@ async def get_news(
     try:
         client = get_mongo_client()
         # 使用配置中的数据库和collection
-        db = client[MONGO_CONFIG["database"]]
-        collection = db[MONGO_CONFIG["collection"]]
+        db = client[settings.MONGODB_DATABASE]
+        collection = db[settings.MONGODB_COLLECTION]
         print(
-            f"[NewsAPI] Connected to MongoDB: {MONGO_CONFIG['database']}.{MONGO_CONFIG['collection']}"
+            f"[NewsAPI] Connected to MongoDB: {settings.MONGODB_DATABASE}.{settings.MONGODB_COLLECTION}"
         )
 
         # 检查collection是否存在数据
@@ -541,7 +540,7 @@ async def get_anomaly_zones(
     client = None
     try:
         client = get_mongo_client()
-        db = client[MONGO_CONFIG["database"]]
+        db = client[settings.MONGODB_DATABASE]
         ensure_mongodb_indexes(db, ticker)
         collection = db[ticker]
 

@@ -8,13 +8,13 @@
     python -m scripts.upload_stocks_to_rag
 """
 
-import os
 import httpx
 import akshare as ak
 from typing import List, Dict
+from app.core.config import settings
 
 # RAG 服务地址
-RAG_SERVICE_URL = os.getenv("RAG_SERVICE_URL", "http://10.139.197.44:8000")
+RAG_SERVICE_URL = settings.RAG_SERVICE_URL
 
 
 def get_stocks_from_akshare() -> List[Dict]:
