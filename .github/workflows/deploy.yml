@@ -67,7 +67,12 @@ jobs:
         run: docker compose down --remove-orphans || true
 
       - name: 🔨 Build images
-        run: docker compose build
+        run: |
+          # 显式导出变量供 docker-compose 使用
+          export NEXT_PUBLIC_API_URL=http://${{ steps.ip.outputs.SERVER_IP }}:18000
+          docker compose build --build-arg NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL frontend
+          docker compose build backend
+
 
       - name: 🚀 Start containers
         run: docker compose up -d
