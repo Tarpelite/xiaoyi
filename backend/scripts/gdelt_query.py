@@ -19,6 +19,7 @@ import pandas as pd
 
 try:
     from gdeltdoc import GdeltDoc, Filters
+
     GDELT_AVAILABLE = True
 except ImportError:
     GDELT_AVAILABLE = False
@@ -84,7 +85,7 @@ class GDELTNewsClient:
         days: int = 30,
         country: Optional[list] = None,
         domain: Optional[list] = None,
-        language: str = "Chinese"
+        language: str = "Chinese",
     ) -> pd.DataFrame:
         """
         搜索 GDELT 新闻
@@ -120,13 +121,17 @@ class GDELTNewsClient:
             if date_diff > self.MAX_DAYS:
                 print(f"⚠️ GDELT API 限制：最多查询 {self.MAX_DAYS} 天")
                 print(f"   请求范围 {date_diff} 天，将分批查询...")
-                return self._batch_search(keyword, start_dt, end_dt, country, domain, language)
+                return self._batch_search(
+                    keyword, start_dt, end_dt, country, domain, language
+                )
 
         return self._single_search(
             keyword,
             start_dt.strftime("%Y-%m-%d"),
             end_dt.strftime("%Y-%m-%d"),
-            country, domain, language
+            country,
+            domain,
+            language,
         )
 
     def _single_search(
@@ -136,7 +141,7 @@ class GDELTNewsClient:
         end_date: str,
         country: Optional[list] = None,
         domain: Optional[list] = None,
-        language: str = "Chinese"
+        language: str = "Chinese",
     ) -> pd.DataFrame:
         """执行单次查询"""
         # 转换关键词（处理中文）
@@ -179,7 +184,7 @@ class GDELTNewsClient:
         end_dt: datetime,
         country: Optional[list] = None,
         domain: Optional[list] = None,
-        language: str = "Chinese"
+        language: str = "Chinese",
     ) -> pd.DataFrame:
         """分批查询（处理超过 90 天的请求）"""
         all_results = []
@@ -192,7 +197,9 @@ class GDELTNewsClient:
                 keyword,
                 current_start.strftime("%Y-%m-%d"),
                 current_end.strftime("%Y-%m-%d"),
-                country, domain, language
+                country,
+                domain,
+                language,
             )
 
             if not df.empty:
@@ -203,18 +210,14 @@ class GDELTNewsClient:
         if all_results:
             combined = pd.concat(all_results, ignore_index=True)
             # 去重
-            if 'url' in combined.columns:
-                combined = combined.drop_duplicates(subset=['url'])
+            if "url" in combined.columns:
+                combined = combined.drop_duplicates(subset=["url"])
             print(f"📊 合计找到 {len(combined)} 条新闻")
             return combined
 
         return pd.DataFrame()
 
-    def search_stock_news(
-        self,
-        stock_name: str,
-        days: int = 30
-    ) -> pd.DataFrame:
+    def search_stock_news(self, stock_name: str, days: int = 30) -> pd.DataFrame:
         """
         查询股票相关新闻（针对中国股票优化）
 
@@ -234,14 +237,11 @@ class GDELTNewsClient:
             "qq.com",
             "hexun.com",
             "caixin.com",
-            "yicai.com"
+            "yicai.com",
         ]
 
         return self.search(
-            keyword=stock_name,
-            days=days,
-            country=["China"],
-            domain=cn_finance_domains
+            keyword=stock_name, days=days, country=["China"], domain=cn_finance_domains
         )
 
 
@@ -251,15 +251,17 @@ def format_news_output(df: pd.DataFrame, limit: int = 20) -> str:
         return "未找到相关新闻"
 
     output = []
-    output.append(f"\n{'='*80}")
+    output.append(f"\n{'=' * 80}")
     output.append(f"共找到 {len(df)} 条新闻 (显示前 {min(limit, len(df))} 条)")
-    output.append(f"{'='*80}\n")
+    output.append(f"{'=' * 80}\n")
 
     # 获取列名
-    title_col = next((c for c in ['title', 'Title'] if c in df.columns), None)
-    url_col = next((c for c in ['url', 'URL'] if c in df.columns), None)
-    date_col = next((c for c in ['seendate', 'DateTime', 'date'] if c in df.columns), None)
-    domain_col = next((c for c in ['domain', 'Domain'] if c in df.columns), None)
+    title_col = next((c for c in ["title", "Title"] if c in df.columns), None)
+    url_col = next((c for c in ["url", "URL"] if c in df.columns), None)
+    date_col = next(
+        (c for c in ["seendate", "DateTime", "date"] if c in df.columns), None
+    )
+    domain_col = next((c for c in ["domain", "Domain"] if c in df.columns), None)
 
     for i, (_, row) in enumerate(df.head(limit).iterrows(), 1):
         title = row[title_col] if title_col else "N/A"
@@ -295,14 +297,18 @@ def main():
 
 注意: GDELT 2.0 Doc API 官方只支持最近 3 个月的新闻
       如需查询一年或更久的历史，请使用 Google BigQuery
-        """
+        """,
     )
 
     parser.add_argument("keyword", help="搜索关键词")
-    parser.add_argument("--days", type=int, default=30, help="查询天数 (默认: 30, 最大: 90)")
+    parser.add_argument(
+        "--days", type=int, default=30, help="查询天数 (默认: 30, 最大: 90)"
+    )
     parser.add_argument("--start", help="开始日期 (YYYY-MM-DD)")
     parser.add_argument("--end", help="结束日期 (YYYY-MM-DD)")
-    parser.add_argument("--stock", action="store_true", help="股票新闻模式（使用中国财经网站过滤）")
+    parser.add_argument(
+        "--stock", action="store_true", help="股票新闻模式（使用中国财经网站过滤）"
+    )
     parser.add_argument("--output", "-o", help="输出到 CSV 文件")
     parser.add_argument("--limit", type=int, default=20, help="显示条数 (默认: 20)")
 
@@ -322,7 +328,7 @@ def main():
             keyword=args.keyword,
             start_date=args.start,
             end_date=args.end,
-            days=args.days
+            days=args.days,
         )
 
     # 输出结果
@@ -330,13 +336,13 @@ def main():
 
     # 保存到文件
     if args.output and not df.empty:
-        df.to_csv(args.output, index=False, encoding='utf-8-sig')
+        df.to_csv(args.output, index=False, encoding="utf-8-sig")
         print(f"✅ 已保存到 {args.output}")
 
     # 显示统计信息
-    if not df.empty and 'domain' in df.columns:
+    if not df.empty and "domain" in df.columns:
         print("\n📊 来源分布:")
-        domain_counts = df['domain'].value_counts().head(10)
+        domain_counts = df["domain"].value_counts().head(10)
         for domain, count in domain_counts.items():
             print(f"   {domain}: {count} 条")
 

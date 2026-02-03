@@ -64,6 +64,11 @@ class Settings(BaseSettings):
         "http://127.0.0.1:3000",
     ]
 
+    # Authing Settings
+    AUTHING_APP_ID: str
+    AUTHING_APP_SECRET: str
+    AUTHING_ISSUER: str
+
     @property
     def api_key(self) -> str:
         """Get API key, raise error if not set (Legacy compat)"""

@@ -5,12 +5,13 @@ Sessions API 端点
 提供会话列表管理接口
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import List, Optional
 
 from app.core.session import Session
 from app.core.redis_client import get_redis
+from app.core.auth import verify_token, User
 
 
 class SessionListItem(BaseModel):
@@ -47,21 +48,17 @@ router = APIRouter()
 
 
 @router.post("/sessions", response_model=CreateSessionResponse)
-async def create_session(request: CreateSessionRequest = None):
+async def create_session(
+    request: Optional[CreateSessionRequest] = None, user: User = Depends(verify_token)
+):
     """
     创建新会话
 
-    Args:
-        request: 可选的创建请求
-            - title: 会话标题（可选，默认"新对话"）
-            - context: 上下文信息（可选）
-
-    Returns:
-        CreateSessionResponse: 包含 session_id, title, created_at
+    Requires Authentication
     """
     req = request or CreateSessionRequest()
 
-    session = Session.create()
+    session = Session.create(user_id=user.sub)
 
     # 如果提供了标题，更新标题
     if req.title:
@@ -77,16 +74,19 @@ async def create_session(request: CreateSessionRequest = None):
 
 
 @router.get("/sessions", response_model=List[SessionListItem])
-async def list_sessions():
+async def list_sessions(user: User = Depends(verify_token)):
     """
     获取所有会话列表
 
     Returns:
         List[SessionListItem]: 会话列表，按更新时间倒序
+        Filtered by authenticated user
     """
     redis = get_redis()
 
     # 获取所有 session keys
+    # Optimization: In production, use a set per user (user:{id}:sessions)
+    # For now, we scan and filter (low scale assumption)
     session_keys = redis.keys("session:*")
 
     sessions = []
@@ -98,7 +98,7 @@ async def list_sessions():
         session = Session(session_id)
         data = session.get()
 
-        if data:
+        if data and data.user_id == user.sub:
             sessions.append(
                 SessionListItem(
                     session_id=data.session_id,
@@ -116,41 +116,40 @@ async def list_sessions():
 
 
 @router.patch("/sessions/{session_id}")
-async def update_session(session_id: str, request: UpdateSessionRequest):
+async def update_session(
+    session_id: str, request: UpdateSessionRequest, user: User = Depends(verify_token)
+):
     """
     更新会话信息（如标题）
-
-    Args:
-        session_id: 会话 ID
-        request: 更新请求
-
-    Returns:
-        {"success": true, "session_id": "...", "title": "..."}
     """
     if not Session.exists(session_id):
         raise HTTPException(status_code=404, detail="会话不存在")
 
     session = Session(session_id)
+    data = session.get()
+
+    if not data or data.user_id != user.sub:
+        raise HTTPException(status_code=403, detail="无权访问此会话")
+
     session.update_title(request.title)
 
     return {"success": True, "session_id": session_id, "title": request.title}
 
 
 @router.delete("/sessions/{session_id}")
-async def delete_session(session_id: str):
+async def delete_session(session_id: str, user: User = Depends(verify_token)):
     """
     删除会话及其所有消息
-
-    Args:
-        session_id: 会话 ID
-
-    Returns:
-        {"success": true, "deleted_session_id": "..."}
     """
     if not Session.exists(session_id):
         raise HTTPException(status_code=404, detail="会话不存在")
 
     session = Session(session_id)
+    data = session.get()
+
+    if not data or data.user_id != user.sub:
+        raise HTTPException(status_code=403, detail="无权访问此会话")
+
     session.delete()
 
     return {"success": True, "deleted_session_id": session_id}

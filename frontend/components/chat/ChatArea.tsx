@@ -155,6 +155,8 @@ const defaultQuickSuggestions = [
   '生成一份投资分析报告',
 ]
 
+import { useAuth } from '@/context/AuthContext'
+
 interface ChatAreaProps {
   sessionId: string | null
   onSessionCreated?: (sessionId: string) => void
@@ -162,6 +164,7 @@ interface ChatAreaProps {
 
 export function ChatArea({ sessionId: externalSessionId, onSessionCreated }: ChatAreaProps) {
   const router = useRouter()
+  const { isAuthenticated, login } = useAuth()
   const [messages, setMessages] = useState<Message[]>([])
   const [inputValue, setInputValue] = useState('')
   const [isLoading, setIsLoading] = useState(false)
@@ -1016,6 +1019,12 @@ export function ChatArea({ sessionId: externalSessionId, onSessionCreated }: Cha
   }
 
   const handleSend = async (messageOverride?: string) => {
+    // Intercept: Login Check
+    if (!isAuthenticated) {
+      login()
+      return
+    }
+
     const messageToSend = messageOverride || inputValue
     if (!messageToSend.trim() || isLoading) return
 

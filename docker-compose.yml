@@ -35,6 +35,9 @@ services:
       - API_BASE_URL=http://backend:8000
       # 运行时环境变量（可选，用于验证）
       - NEXT_PUBLIC_API_URL=http://${SERVER_IP}:18000
+      - AUTHING_APP_ID=${AUTHING_APP_ID}
+      - AUTHING_APP_SECRET=${AUTHING_APP_SECRET}
+      - AUTHING_ISSUER=${AUTHING_ISSUER}
     depends_on:
       backend:
         condition: service_healthy

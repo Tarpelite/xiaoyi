@@ -15,6 +15,8 @@ function HomeContent() {
     deleteSession,
     renameSession,
     refreshSessions,
+    isAuthenticated,
+    login,
   } = useSessionManager()
 
   return (

@@ -43,6 +43,9 @@ jobs:
           cat > backend/.env << EOF
           DEEPSEEK_API_KEY=${{ secrets.DEEPSEEK_API_KEY }}
           TAVILY_API_KEY=${{ secrets.TAVILY_API_KEY }}
+          AUTHING_APP_ID=${{ secrets.AUTHING_APP_ID }}
+          AUTHING_APP_SECRET=${{ secrets.AUTHING_APP_SECRET }}
+          AUTHING_ISSUER=${{ secrets.AUTHING_ISSUER }}
           HF_TOKEN=
           RAG_SERVICE_URL=http://${{ secrets.RAG_SERVICE_IP }}:28000
           HOST=0.0.0.0

@@ -324,11 +324,6 @@ class Message:
             # 目前先通过思考日志保存，以便后续可以查看
             import json
 
-            selection_info = {
-                "selected_model": selected_model,
-                "model_comparison": model_comparison,
-                "is_better_than_baseline": is_better_than_baseline,
-            }
             self.append_thinking_log(
                 "model_selection",
                 "模型选择",
@@ -403,14 +398,14 @@ class Session:
         self.ttl = 86400  # 24小时过期
 
     @classmethod
-    def create(cls) -> "Session":
+    def create(cls, user_id: Optional[str] = None) -> "Session":
         """创建新会话"""
         session_id = str(uuid.uuid4())
         session = cls(session_id)
 
         now = datetime.now().isoformat()
         initial_data = SessionData(
-            session_id=session_id, created_at=now, updated_at=now
+            session_id=session_id, created_at=now, updated_at=now, user_id=user_id
         )
 
         session._save(initial_data)

@@ -12,6 +12,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import type { SessionMetadata } from '@/lib/types/session'
 import { listSessions, deleteSession as apiDeleteSession, updateSessionTitle as apiUpdateSessionTitle } from '@/lib/api/sessions'
+import { useAuth } from '@/context/AuthContext'
 
 export function useSessionManager() {
     const router = useRouter()
@@ -21,8 +22,10 @@ export function useSessionManager() {
     const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
     const [isLoading, setIsLoading] = useState(true)
     const [isInitialized, setIsInitialized] = useState(false)
-    // 用于强制重新挂载 ChatArea（当 activeSessionId 已经是 null 时点击新建对话）
     const [chatKey, setChatKey] = useState(0)
+
+    // Auth state from Context
+    const { user, isAuthenticated, login } = useAuth()
 
     // Helper: Update URL with session ID
     const updateUrl = useCallback((sessionId: string | null) => {
@@ -33,20 +36,24 @@ export function useSessionManager() {
         }
     }, [router])
 
-    // Load sessions on mount (only once)
+    // Load sessions on login or mount
     useEffect(() => {
         const loadSessions = async () => {
-            // URL 是唯一的会话标识来源
             const urlSessionId = searchParams.get('session')
 
             try {
                 setIsLoading(true)
-                const sessionList = await listSessions()
-                setSessions(sessionList)
 
-                // 如果 URL 中有 session 且存在，使用它；否则保持 null（新会话状态）
-                if (urlSessionId && sessionList.some(s => s.session_id === urlSessionId)) {
-                    setActiveSessionId(urlSessionId)
+                if (isAuthenticated && user) {
+                    // Load Sessions only if authenticated
+                    const sessionList = await listSessions()
+                    setSessions(sessionList)
+
+                    if (urlSessionId && sessionList.some(s => s.session_id === urlSessionId)) {
+                        setActiveSessionId(urlSessionId)
+                    }
+                } else {
+                    setSessions([])
                 }
             } catch (error) {
                 console.error('[useSessionManager] Failed to load sessions:', error)
@@ -57,7 +64,7 @@ export function useSessionManager() {
         }
 
         loadSessions()
-    }, [])  // 只在挂载时运行一次
+    }, [isAuthenticated, user, searchParams])
 
     // Create new session
     const createNewSession = useCallback(() => {
@@ -146,5 +153,8 @@ export function useSessionManager() {
         deleteSession,
         renameSession,
         refreshSessions,
+        user,
+        isAuthenticated,
+        login
     }
 }

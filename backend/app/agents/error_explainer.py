@@ -20,14 +20,10 @@ class ErrorExplainerAgent(BaseAgent):
         "invalid_code": "股票代码不存在或格式错误",
         "network": "网络连接问题",
         "permission": "数据访问权限受限",
-        "unknown": "数据获取失败"
+        "unknown": "数据获取失败",
     }
 
-    def explain_data_fetch_error(
-        self,
-        error: DataFetchError,
-        user_query: str
-    ) -> str:
+    def explain_data_fetch_error(self, error: DataFetchError, user_query: str) -> str:
         """
         生成友好的错误解释和建议
 
@@ -44,7 +40,7 @@ class ErrorExplainerAgent(BaseAgent):
 
 数据获取失败了:
 - 错误类型: {error_context}
-- 股票代码/标的: {error.context.get('symbol', 'unknown')}
+- 股票代码/标的: {error.context.get("symbol", "unknown")}
 - 技术错误信息: {error.original_error[:300]}
 
 请你作为专业且友好的金融助手，用轻松易懂的语气生成一个解释和建议（200-300字），包括：
@@ -59,7 +55,7 @@ class ErrorExplainerAgent(BaseAgent):
 3. **具体建议**: 给出可操作的建议
    - 如何修正（确认代码、检查格式）
    - 替代方案（试试其他代码/稍后重试）
-   - 可选：推荐1-2个可用的热门股票示例（如 600519 茅台、000001 平安银行）
+   - 可选：推荐1-2个可用的热门股票示例（如 600519 贵州茅台、000001 平安银行）
 
 格式要求：
 - 使用 Markdown 格式
@@ -69,8 +65,7 @@ class ErrorExplainerAgent(BaseAgent):
 """
 
         messages = self.build_messages(
-            user_content=prompt,
-            system_prompt=self.SYSTEM_PROMPT
+            user_content=prompt, system_prompt=self.SYSTEM_PROMPT
         )
 
         content = self.call_llm(messages, fallback=None)
@@ -91,7 +86,7 @@ class ErrorExplainerAgent(BaseAgent):
         Returns:
             简单的错误解释
         """
-        symbol = error.context.get('symbol', '未知')
+        symbol = error.context.get("symbol", "未知")
 
         if error.error_type == "invalid_code":
             return f"""抱歉，无法获取 "{symbol}" 的数据。

@@ -13,6 +13,8 @@ import { PanelLeftClose, PanelLeft, Plus, Settings } from 'lucide-react'
 import { SessionListItem } from './SessionListItem'
 import type { SessionMetadata } from '@/lib/types/session'
 
+import { useAuth } from '@/context/AuthContext'
+
 interface SidebarProps {
     sessions: SessionMetadata[]
     activeSessionId: string | null
@@ -30,6 +32,7 @@ export function Sidebar({
     onDeleteSession,
     onRenameSession,
 }: SidebarProps) {
+    const { isAuthenticated } = useAuth()
     const [collapsed, setCollapsed] = useState(false)
 
     return (
@@ -67,7 +70,11 @@ export function Sidebar({
                 {/* Middle Section - Session List */}
                 <div className="flex-1 overflow-y-auto py-2 px-2">
                     {!collapsed ? (
-                        sessions.length > 0 ? (
+                        !isAuthenticated ? (
+                            <div className="text-center text-gray-400 text-sm mt-8 px-4">
+                                登录后保存对话记录
+                            </div>
+                        ) : sessions.length > 0 ? (
                             sessions.map((session) => (
                                 <SessionListItem
                                     key={session.session_id}
