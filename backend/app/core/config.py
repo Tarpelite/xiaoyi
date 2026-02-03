@@ -1,11 +1,11 @@
-import os
-from typing import List, Optional
+from typing import List
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pathlib import Path
 
 # Load .env settings are handled by pydantic, but we can set the default location
-BACKEND_DIR = Path(__file__).parent.parent.parent
-ENV_PATH = BACKEND_DIR / ".env"
+# 【修改】从项目根目录读取统一的 .env 文件
+PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
+ENV_PATH = PROJECT_ROOT / ".env"
 
 # Restore load_dotenv for libraries/scripts relying on os.environ
 try:

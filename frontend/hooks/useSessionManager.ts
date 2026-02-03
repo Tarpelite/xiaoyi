@@ -25,7 +25,7 @@ export function useSessionManager() {
     const [chatKey, setChatKey] = useState(0)
 
     // Auth state from Context
-    const { user, isAuthenticated, login } = useAuth()
+    const { user, isAuthenticated, login, accessToken, isLoading: isLoadingAuth } = useAuth()
 
     // Helper: Update URL with session ID
     const updateUrl = useCallback((sessionId: string | null) => {
@@ -41,10 +41,15 @@ export function useSessionManager() {
         const loadSessions = async () => {
             const urlSessionId = searchParams.get('session')
 
+            // ✅ 修复：等待 Auth 初始化完成
+            if (isLoadingAuth) {
+                return
+            }
+
             try {
                 setIsLoading(true)
 
-                if (isAuthenticated && user) {
+                if (isAuthenticated && user && accessToken) {
                     // Load Sessions only if authenticated
                     const sessionList = await listSessions()
                     setSessions(sessionList)
@@ -64,7 +69,7 @@ export function useSessionManager() {
         }
 
         loadSessions()
-    }, [isAuthenticated, user, searchParams])
+    }, [isAuthenticated, user, searchParams, accessToken, isLoadingAuth])
 
     // Create new session
     const createNewSession = useCallback(() => {
@@ -126,22 +131,29 @@ export function useSessionManager() {
 
     // Refresh sessions list (call after creating new message)
     const refreshSessions = useCallback(async () => {
+        if (!isAuthenticated || !accessToken) return
+
         try {
             const sessionList = await listSessions()
             setSessions(sessionList)
         } catch (error) {
             console.error('Failed to refresh sessions:', error)
         }
-    }, [])
+    }, [isAuthenticated, accessToken])
 
     // Auto-refresh sessions every 3 seconds to detect new sessions
     useEffect(() => {
+        // ✅ 修复：只在已认证且 Auth 完成初始化后才自动刷新
+        if (!isAuthenticated || isLoadingAuth) {
+            return
+        }
+
         const interval = setInterval(() => {
             refreshSessions()
         }, 3000)
 
         return () => clearInterval(interval)
-    }, [refreshSessions])
+    }, [refreshSessions, isAuthenticated, isLoadingAuth])
 
     return {
         sessions,

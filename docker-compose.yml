@@ -25,6 +25,9 @@ services:
       args:
         # 将宿主机的 SERVER_IP 注入镜像构建过程
         - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+    # 【关键修改】从根目录读取统一的 .env 文件
+    env_file:
+      - .env
     container_name: xiaoyi-frontend
     restart: unless-stopped
     ports:
@@ -49,8 +52,9 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
+    # 【关键修改】从根目录读取统一的 .env 文件
     env_file:
-      - ./backend/.env
+      - .env
     container_name: xiaoyi-backend
     restart: unless-stopped
     ports:
@@ -65,6 +69,8 @@ services:
       - HF_TOKEN=${HF_TOKEN}
     volumes:
       - ${HOME}/.cache/huggingface:/root/.cache/huggingface
+      #【关键修改】挂载统一的 .env 文件（只读）
+      - ./.env:/app/.env:ro
     depends_on:
       redis:
         condition: service_healthy

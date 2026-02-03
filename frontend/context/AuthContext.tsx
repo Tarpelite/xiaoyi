@@ -13,6 +13,7 @@ interface AuthingUser {
 
 interface AuthContextType {
     user: AuthingUser | null;
+    accessToken: string | null;
     isAuthenticated: boolean;
     isLoading: boolean;
     login: () => void;
@@ -21,6 +22,7 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType>({
     user: null,
+    accessToken: null,
     isAuthenticated: false,
     isLoading: true,
     login: () => { },
@@ -29,6 +31,7 @@ const AuthContext = createContext<AuthContextType>({
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
     const [user, setUser] = useState<AuthingUser | null>(null);
+    const [accessToken, setAccessToken] = useState<string | null>(null);
     const [isLoading, setIsLoading] = useState(true);
 
     const login = useCallback(() => {
@@ -36,6 +39,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }, []);
 
     const logout = useCallback(() => {
+        // Clear local storage
+        if (typeof window !== 'undefined') {
+            localStorage.removeItem('authing_access_token');
+        }
         window.location.href = '/api/auth/logout';
     }, []);
 
@@ -47,8 +54,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 if (res.ok) {
                     const data = await res.json();
                     setUser(data.user);
+
+                    // Store access token if available
+                    if (data.accessToken) {
+                        setAccessToken(data.accessToken);
+                        if (typeof window !== 'undefined') {
+                            localStorage.setItem('authing_access_token', data.accessToken);
+                        }
+                    }
                 } else {
                     setUser(null);
+                    setAccessToken(null);
+                    if (typeof window !== 'undefined') {
+                        localStorage.removeItem('authing_access_token');
+                    }
                 }
             } catch (error) {
                 console.error('Failed to check auth status:', error);
@@ -63,6 +82,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     const value = {
         user,
+        accessToken,
         isAuthenticated: !!user,
         isLoading,
         login,

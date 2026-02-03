@@ -164,7 +164,7 @@ interface ChatAreaProps {
 
 export function ChatArea({ sessionId: externalSessionId, onSessionCreated }: ChatAreaProps) {
   const router = useRouter()
-  const { isAuthenticated, login } = useAuth()
+  const { isAuthenticated, login, isLoading: isLoadingAuth, accessToken } = useAuth()
   const [messages, setMessages] = useState<Message[]>([])
   const [inputValue, setInputValue] = useState('')
   const [isLoading, setIsLoading] = useState(false)
@@ -630,6 +630,19 @@ export function ChatArea({ sessionId: externalSessionId, onSessionCreated }: Cha
         return
       }
 
+      // ✅ 修复异步竞态：等待 Auth 初始化完成
+      if (isLoadingAuth) {
+        // Auth 状态还在加载中，延迟执行（会通过依赖重新触发）
+        return
+      }
+
+      // ✅ 修复：未登录时不加载历史，直接清空消息
+      if (!isAuthenticated || !accessToken) {
+        setMessages([])
+        setIsLoadingHistory(false)
+        return
+      }
+
       setIsLoadingHistory(true)
 
       try {
@@ -749,7 +762,7 @@ export function ChatArea({ sessionId: externalSessionId, onSessionCreated }: Cha
     return () => {
       abortController.abort()
     }
-  }, [sessionId])
+  }, [sessionId, isAuthenticated, accessToken, isLoadingAuth]) // ✅ 添加 isLoadingAuth 依赖
 
   // 更新快速追问建议（在对话完成后）
   useEffect(() => {
@@ -1020,6 +1033,10 @@ export function ChatArea({ sessionId: externalSessionId, onSessionCreated }: Cha
 
   const handleSend = async (messageOverride?: string) => {
     // Intercept: Login Check
+    if (isLoadingAuth) {
+      return
+    }
+
     if (!isAuthenticated) {
       login()
       return

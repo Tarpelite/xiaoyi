@@ -34,6 +34,24 @@ export async function GET(request: NextRequest, { params }: { params: { authing:
         return NextResponse.redirect(loginUrl);
     }
 
+    if (slug === 'logout') {
+        // 清除 Cookie
+        const cookieStore = cookies();
+        cookieStore.delete('access_token');
+        cookieStore.delete('id_token');
+        cookieStore.delete('refresh_token');
+
+        // 构建 Authing 登出 URL
+        const logoutParams = new URLSearchParams({
+            post_logout_redirect_uri: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000',
+        });
+
+        const logoutUrl = `${ISSUER}/session/end?${logoutParams.toString()}`;
+        console.log('[Auth] Logging out, redirecting to:', logoutUrl);
+
+        return NextResponse.redirect(logoutUrl);
+    }
+
     if (slug === 'callback') {
         const searchParams = request.nextUrl.searchParams;
         const code = searchParams.get('code');
@@ -118,7 +136,12 @@ export async function GET(request: NextRequest, { params }: { params: { authing:
             }
 
             const user = await userRes.json();
-            return NextResponse.json({ user });
+            // Return both user info and the access token
+            // The token is needed by the client-side code to make authenticated requests to the backend
+            return NextResponse.json({
+                user,
+                accessToken: token.value
+            });
         } catch (e) {
             return NextResponse.json({ user: null }, { status: 401 });
         }

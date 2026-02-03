@@ -23,6 +23,7 @@ export async function createSession(title?: string): Promise<CreateSessionRespon
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
+            'Authorization': `Bearer ${localStorage.getItem('authing_access_token') || ''}`,
         },
         body: JSON.stringify({ title: title || null }),
     })
@@ -42,6 +43,7 @@ export async function listSessions(): Promise<SessionMetadata[]> {
         method: 'GET',
         headers: {
             'Content-Type': 'application/json',
+            'Authorization': `Bearer ${localStorage.getItem('authing_access_token') || ''}`,
         },
     })
 
@@ -60,6 +62,7 @@ export async function deleteSession(sessionId: string): Promise<void> {
         method: 'DELETE',
         headers: {
             'Content-Type': 'application/json',
+            'Authorization': `Bearer ${localStorage.getItem('authing_access_token') || ''}`,
         },
     })
 
@@ -79,6 +82,7 @@ export async function updateSessionTitle(
         method: 'PATCH',
         headers: {
             'Content-Type': 'application/json',
+            'Authorization': `Bearer ${localStorage.getItem('authing_access_token') || ''}`,
         },
         body: JSON.stringify({ title }),
     })

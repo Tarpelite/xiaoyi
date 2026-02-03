@@ -13,9 +13,13 @@ dist/
 build/
 *.egg-info/
 
-# Environment
-.env
-.env.local
+# Environment variables
+# 【关键修改】统一的环境变量文件
+/.env
+/backend/.env
+/frontend/.env.local
+# 保留配置模板
+!/.env.example
 .env.*.local
 
 # IDE
