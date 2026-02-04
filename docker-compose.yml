@@ -25,6 +25,10 @@ services:
       args:
         # 将宿主机的 SERVER_IP 注入镜像构建过程
         - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+        - NEXT_PUBLIC_AUTHING_APP_ID=${AUTHING_APP_ID}
+        - NEXT_PUBLIC_AUTHING_DOMAIN=${AUTHING_ISSUER}
+        - NEXT_PUBLIC_AUTHING_ISSUER=${AUTHING_ISSUER}
+        - NEXT_PUBLIC_AUTHING_REDIRECT_URI=http://${SERVER_IP}:13000/api/auth/callback
     # 【关键修改】从根目录读取统一的 .env 文件
     env_file:
       - .env
@@ -38,9 +42,15 @@ services:
       - API_BASE_URL=http://backend:8000
       # 运行时环境变量（可选，用于验证）
       - NEXT_PUBLIC_API_URL=http://${SERVER_IP}:18000
+      # Authing配置（服务端使用）
       - AUTHING_APP_ID=${AUTHING_APP_ID}
       - AUTHING_APP_SECRET=${AUTHING_APP_SECRET}
       - AUTHING_ISSUER=${AUTHING_ISSUER}
+      # Authing公开配置（客户端使用）
+      - NEXT_PUBLIC_AUTHING_APP_ID=${AUTHING_APP_ID}
+      - NEXT_PUBLIC_AUTHING_DOMAIN=${AUTHING_ISSUER}
+      - NEXT_PUBLIC_AUTHING_ISSUER=${AUTHING_ISSUER}
+      - NEXT_PUBLIC_AUTHING_REDIRECT_URI=http://${SERVER_IP}:13000/api/auth/callback
     depends_on:
       backend:
         condition: service_healthy

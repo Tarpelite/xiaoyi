@@ -33,20 +33,16 @@ jobs:
           echo "SERVER_IP=${SERVER_IP}" >> $GITHUB_OUTPUT
           echo "📍 服务器 IP: ${SERVER_IP}"
 
-      - name: 📝 Create .env file
+      - name: 📝 Create .env files
         run: |
+          # 创建根目录 .env 文件（后端使用）
           cat > .env << EOF
-          DEEPSEEK_API_KEY=${{ secrets.DEEPSEEK_API_KEY }}
-          NEXT_PUBLIC_API_URL=http://${{ steps.ip.outputs.SERVER_IP }}:18000
-          EOF
-          
-          cat > backend/.env << EOF
           DEEPSEEK_API_KEY=${{ secrets.DEEPSEEK_API_KEY }}
           TAVILY_API_KEY=${{ secrets.TAVILY_API_KEY }}
           AUTHING_APP_ID=${{ secrets.AUTHING_APP_ID }}
           AUTHING_APP_SECRET=${{ secrets.AUTHING_APP_SECRET }}
           AUTHING_ISSUER=${{ secrets.AUTHING_ISSUER }}
-          HF_TOKEN=
+          HF_TOKEN=${{ secrets.HF_TOKEN }}
           RAG_SERVICE_URL=http://${{ secrets.RAG_SERVICE_IP }}:28000
           HOST=0.0.0.0
           PORT=8000
@@ -60,11 +56,25 @@ jobs:
           MONGODB_USERNAME=${{ secrets.MONGODB_USERNAME }}
           MONGODB_PASSWORD=${{ secrets.MONGODB_PASSWORD }}
           MONGODB_DATABASE=${{ secrets.MONGODB_DATABASE }}
-
+          NEXT_PUBLIC_API_URL=http://${{ steps.ip.outputs.SERVER_IP }}:18000
+          SERVER_IP=${{ steps.ip.outputs.SERVER_IP }}
+          EOF
+          
+          # 创建前端 .env.local 文件
+          cat > frontend/.env.local << EOF
+          AUTHING_APP_ID=${{ secrets.AUTHING_APP_ID }}
+          AUTHING_APP_SECRET=${{ secrets.AUTHING_APP_SECRET }}
+          AUTHING_ISSUER=${{ secrets.AUTHING_ISSUER }}
+          NEXT_PUBLIC_AUTHING_APP_ID=${{ secrets.AUTHING_APP_ID }}
+          NEXT_PUBLIC_AUTHING_DOMAIN=${{ secrets.AUTHING_ISSUER }}
+          NEXT_PUBLIC_AUTHING_ISSUER=${{ secrets.AUTHING_ISSUER }}
+          NEXT_PUBLIC_AUTHING_REDIRECT_URI=http://${{ steps.ip.outputs.SERVER_IP }}:13000/api/auth/callback
+          NEXT_PUBLIC_API_URL=http://${{ steps.ip.outputs.SERVER_IP }}:18000
           EOF
           
           echo "📝 NEXT_PUBLIC_API_URL=http://${{ steps.ip.outputs.SERVER_IP }}:18000"
           echo "📝 Redis配置: redis:6379"
+          echo "📝 Authing配置: APP_ID=${{ secrets.AUTHING_APP_ID }}"
 
       - name: 🛑 Stop existing containers
         run: docker compose down --remove-orphans || true
@@ -73,7 +83,18 @@ jobs:
         run: |
           # 显式导出变量供 docker-compose 使用
           export NEXT_PUBLIC_API_URL=http://${{ steps.ip.outputs.SERVER_IP }}:18000
-          docker compose build --build-arg NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL frontend
+          export AUTHING_APP_ID=${{ secrets.AUTHING_APP_ID }}
+          export AUTHING_ISSUER=${{ secrets.AUTHING_ISSUER }}
+          export SERVER_IP=${{ steps.ip.outputs.SERVER_IP }}
+          
+          docker compose build \
+            --build-arg NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL \
+            --build-arg NEXT_PUBLIC_AUTHING_APP_ID=$AUTHING_APP_ID \
+            --build-arg NEXT_PUBLIC_AUTHING_DOMAIN=$AUTHING_ISSUER \
+            --build-arg NEXT_PUBLIC_AUTHING_ISSUER=$AUTHING_ISSUER \
+            --build-arg NEXT_PUBLIC_AUTHING_REDIRECT_URI=http://$SERVER_IP:13000/api/auth/callback \
+            frontend
+          
           docker compose build backend
 
 
