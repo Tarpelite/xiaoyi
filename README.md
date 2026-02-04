@@ -1,8 +1,8 @@
-# 小易猜猜 (Xiaoyi) 🚀
+# 小易猜猜 (Xiaoyi) 
 
 <div align="center">
 
-![Logo](frontend/public/logo.png)
+<img src="frontend/public/logo.png" width="10%" alt="Logo">
 
 **Make Time Series Forecast Great Again**
 
@@ -97,7 +97,7 @@ graph TB
 
 ---
 
-## 🚀 快速启动
+##  快速启动
 
 ### 📋 前置要求
 
