@@ -530,7 +530,7 @@ pnpm format
 ACT实验室 · SCAL小组
 
 **指导老师**:
-- 周导赫 (Haoyi Zhou)
+- 周号益 (Haoyi Zhou)
 - 陈天宇 (Tianyu Chen)
 
 **团队成员**:
