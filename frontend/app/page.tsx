@@ -1,9 +1,11 @@
 'use client'
 
-import { Suspense } from 'react'
+import React, { Suspense, useState, useEffect } from 'react'
 import { ChatArea } from '@/components/chat/ChatArea'
 import { Sidebar } from '@/components/sidebar/Sidebar'
+import { ProfileCompletionModal } from '@/components/modals/ProfileCompletionModal'
 import { useSessionManager } from '@/hooks/useSessionManager'
+import { useAuth } from '@/context/AuthContext'
 
 function HomeContent() {
   const {
@@ -18,6 +20,18 @@ function HomeContent() {
     isAuthenticated,
     login,
   } = useSessionManager()
+
+  const { needsProfileCompletion } = useAuth()
+  const [showProfileCompletion, setShowProfileCompletion] = useState(false)
+
+  // 当检测到需要补全资料时，显示模态框
+  useEffect(() => {
+    if (needsProfileCompletion && isAuthenticated) {
+      setShowProfileCompletion(true)
+    } else {
+      setShowProfileCompletion(false)
+    }
+  }, [needsProfileCompletion, isAuthenticated])
 
   return (
     <div className="flex h-screen gradient-mesh">
@@ -41,6 +55,12 @@ function HomeContent() {
           // ChatArea 内部已经有正确的 sessionId，会自动更新 URL
           refreshSessions()
         }}
+      />
+
+      {/* 资料补全模态框 */}
+      <ProfileCompletionModal
+        isOpen={showProfileCompletion}
+        onClose={() => setShowProfileCompletion(false)}
       />
     </div>
   )

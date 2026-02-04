@@ -127,20 +127,26 @@ export async function GET(request: NextRequest, { params }: { params: { authing:
             // Validation with Authing introspection or locally with JWKS is better
             // For performance, we can just return what we have or call userinfo
             // Let's call userinfo for now to be safe
-            const userRes = await fetch(`${ISSUER}/me`, {
+            const userInfoRes = await fetch(`${ISSUER}/me`, {
                 headers: { Authorization: `Bearer ${token.value}` },
             });
 
-            if (!userRes.ok) {
-                return NextResponse.json({ user: null }, { status: 401 });
+            if (!userInfoRes.ok) {
+                return NextResponse.json({ error: 'Failed to fetch user info' }, { status: 401 });
             }
 
-            const user = await userRes.json();
-            // Return both user info and the access token
+            const userInfo = await userInfoRes.json();
+
+            // 确保nickname字段映射到name，以便前端检测逻辑正常工作
+            const userData = {
+                ...userInfo,
+                name: userInfo.nickname || userInfo.name || userInfo.email,
+            };
+
             // The token is needed by the client-side code to make authenticated requests to the backend
             return NextResponse.json({
-                user,
-                accessToken: token.value
+                user: userData,
+                accessToken: token.value,
             });
         } catch (e) {
             return NextResponse.json({ user: null }, { status: 401 });

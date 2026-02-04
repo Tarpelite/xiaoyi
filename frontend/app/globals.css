@@ -103,3 +103,34 @@ body {
 .animate-fade-in {
     animation: fade-in 0.6s ease-out;
 }
+
+/* Dropdown 动画 */
+@keyframes dropdown-slide {
+    from {
+        opacity: 0;
+        transform: translateY(-8px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.animate-dropdown {
+    animation: dropdown-slide 0.2s ease-out;
+}
+
+/* 优化玻璃态效果 */
+.glass-enhanced {
+    background: rgba(18, 18, 26, 0.85);
+    backdrop-filter: blur(24px) saturate(150%);
+    border: 1px solid rgba(139, 92, 246, 0.1);
+}
+
+/* 强调色渐变 */
+.gradient-violet-cyan {
+    background: linear-gradient(135deg, #8b5cf6 0%, #06b6d4 100%);
+}
+
+/* Tooltip样式已内联实现 */

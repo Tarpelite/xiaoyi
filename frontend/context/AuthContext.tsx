@@ -7,6 +7,8 @@ interface AuthingUser {
     sub: string;
     email?: string;
     username?: string;
+    name?: string;
+    bio?: string;
     picture?: string;
     [key: string]: any;
 }
@@ -16,8 +18,10 @@ interface AuthContextType {
     accessToken: string | null;
     isAuthenticated: boolean;
     isLoading: boolean;
+    needsProfileCompletion: boolean;
     login: () => void;
     logout: () => void;
+    updateUser: (updates: Partial<AuthingUser>) => void;
 }
 
 const AuthContext = createContext<AuthContextType>({
@@ -25,14 +29,17 @@ const AuthContext = createContext<AuthContextType>({
     accessToken: null,
     isAuthenticated: false,
     isLoading: true,
+    needsProfileCompletion: false,
     login: () => { },
     logout: () => { },
+    updateUser: () => { },
 });
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
     const [user, setUser] = useState<AuthingUser | null>(null);
     const [accessToken, setAccessToken] = useState<string | null>(null);
     const [isLoading, setIsLoading] = useState(true);
+    const [needsProfileCompletion, setNeedsProfileCompletion] = useState(false);
 
     const login = useCallback(() => {
         window.location.href = '/api/auth/login';
@@ -44,6 +51,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             localStorage.removeItem('authing_access_token');
         }
         window.location.href = '/api/auth/logout';
+    }, []);
+
+    const updateUser = useCallback((updates: Partial<AuthingUser>) => {
+        setUser((prev) => {
+            if (!prev) return prev;
+            return { ...prev, ...updates };
+        });
     }, []);
 
     // Check auth status on mount
@@ -80,16 +94,31 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         checkAuth();
     }, []);
 
-    const value = {
-        user,
-        accessToken,
-        isAuthenticated: !!user,
-        isLoading,
-        login,
-        logout,
-    };
+    // 检测用户是否需要补全资料
+    useEffect(() => {
+        if (user && !isLoading) {
+            // 如果昵称为空或等于邮箱，说明需要补全
+            const needsCompletion = !user.name || user.name === user.email || user.name.trim() === ''
+            setNeedsProfileCompletion(needsCompletion)
+        } else {
+            setNeedsProfileCompletion(false)
+        }
+    }, [user, isLoading])
 
-    return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+    return (
+        <AuthContext.Provider value={{
+            user,
+            accessToken,
+            isAuthenticated: !!user,
+            isLoading,
+            needsProfileCompletion,
+            login,
+            logout,
+            updateUser,
+        }}>
+            {children}
+        </AuthContext.Provider>
+    );
 }
 
 export const useAuth = () => {
