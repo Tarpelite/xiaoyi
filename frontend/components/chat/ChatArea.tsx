@@ -1293,7 +1293,7 @@ export function ChatArea({ sessionId: externalSessionId, onSessionCreated }: Cha
 
           {/* 产品主页链接 */}
           <a
-            href="https://xiaoyi.tianyucn98.workers.dev"
+            href="https://xiaoyi.actscal.org"
             target="_blank"
             rel="noopener noreferrer"
             className="flex items-center gap-1.5 text-sm text-gray-400 hover:text-violet-400 transition-colors group"
@@ -1330,7 +1330,7 @@ export function ChatArea({ sessionId: externalSessionId, onSessionCreated }: Cha
 
           {/* Docs/Demo 按钮 */}
           <a
-            href="https://xiaoyi.tianyucn98.workers.dev"
+            href="https://xiaoyi.actscal.org"
             target="_blank"
             rel="noopener noreferrer"
             className="flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-violet-600/20 to-cyan-600/20 hover:from-violet-600/30 hover:to-cyan-600/30 border border-violet-500/30 rounded-lg text-sm font-medium text-violet-300 hover:text-violet-200 transition-all"

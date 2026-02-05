@@ -9,7 +9,7 @@
 *挺能猜的，也挺能说的*  
 *Pretty good at forecasting, and explaining*
 
-[![Demo](https://img.shields.io/badge/Demo-Live-blue)](https://xiaoyi.tianyucn98.workers.dev)
+[![Demo](https://img.shields.io/badge/Demo-Live-blue)](https://xiaoyi.actscal.org)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![GitHub Stars](https://img.shields.io/github/stars/Tarpelite/xiaoyi?style=social)](https://github.com/Tarpelite/xiaoyi/stargazers)
 [![GitHub Watchers](https://img.shields.io/github/watchers/Tarpelite/xiaoyi?style=social)](https://github.com/Tarpelite/xiaoyi/watchers)
@@ -26,7 +26,7 @@
 [![uv](https://img.shields.io/badge/uv-Latest-DE5FE9?logo=astral&logoColor=white)](https://github.com/astral-sh/uv)
 [![pnpm](https://img.shields.io/badge/pnpm-8+-F69220?logo=pnpm&logoColor=white)](https://pnpm.io/)
 
-[在线演示](https://xiaoyi.tianyucn98.workers.dev) · [技术文档](#技术架构) · [快速开始](#快速启动)
+[在线演示](https://xiaoyi.actscal.org) · [技术文档](#技术架构) · [快速开始](#快速启动)
 
 </div>
 
@@ -554,7 +554,7 @@ ACT实验室 · SCAL小组
 
 ## 🔗 相关链接
 
-- **在线演示**: https://xiaoyi.tianyucn98.workers.dev
+- **在线演示**: https://xiaoyi.actscal.org
 - **GitHub**: https://github.com/Hanyu-Zhou/xiaoyi
 - **联系邮箱**: hanyuc@buaa.edu.cn
 
