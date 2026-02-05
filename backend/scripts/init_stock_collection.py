@@ -31,7 +31,7 @@ def main():
     if count > 0:
         print(f"\n✅ 股票集合已有 {count} 条记录")
         response = input("是否重新初始化? (y/N): ").strip().lower()
-        if response != 'y':
+        if response != "y":
             print("取消初始化")
             return
 
@@ -66,7 +66,9 @@ def main():
     for query in test_queries:
         result = matcher.match(query)
         if result.success and result.stock_info:
-            print(f"  '{query}' → {result.stock_info.stock_name}({result.stock_info.stock_code}) [置信度: {result.confidence:.2f}]")
+            print(
+                f"  '{query}' → {result.stock_info.stock_name}({result.stock_info.stock_code}) [置信度: {result.confidence:.2f}]"
+            )
         else:
             print(f"  '{query}' → {result.error_message}")
 

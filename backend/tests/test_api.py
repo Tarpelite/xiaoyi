@@ -1,4 +1,5 @@
 """FastAPI 端点测试"""
+
 import json
 
 
@@ -20,7 +21,7 @@ def test_chat_stream_invalid_model(client):
     """测试无效模型 - 应返回 error 类型"""
     response = client.post(
         "/api/chat/stream",
-        json={"message": "帮我分析一下平安银行的股价走势", "model": "invalid_model"}
+        json={"message": "帮我分析一下茅台的股价走势", "model": "invalid_model"},
     )
     assert response.status_code == 200
     assert "text/event-stream" in response.headers.get("content-type", "")
@@ -33,7 +34,7 @@ def test_chat_stream_invalid_model(client):
     # 预期返回 error 类型
     assert data == {
         "type": "error",
-        "message": "不支持的模型: invalid_model。支持: 'prophet', 'xgboost', 'randomforest', 'dlinear'"
+        "message": "不支持的模型: invalid_model。支持: 'prophet', 'xgboost', 'randomforest', 'dlinear'",
     }
 
 
@@ -41,7 +42,7 @@ def test_chat_stream_prophet(client):
     """测试 Prophet 模型分析"""
     response = client.post(
         "/api/chat/stream",
-        json={"message": "帮我预测一下贵州茅台未来30天的股价", "model": "prophet"}
+        json={"message": "帮我预测一下贵州茅台未来30天的股价", "model": "prophet"},
     )
     assert response.status_code == 200
     assert "text/event-stream" in response.headers.get("content-type", "")
@@ -62,7 +63,7 @@ def test_chat_stream_xgboost(client):
     """测试 XGBoost 模型分析"""
     response = client.post(
         "/api/chat/stream",
-        json={"message": "用XGBoost分析沪深300指数走势", "model": "xgboost"}
+        json={"message": "用XGBoost分析沪深300指数走势", "model": "xgboost"},
     )
     assert response.status_code == 200
     assert "text/event-stream" in response.headers.get("content-type", "")

@@ -164,7 +164,10 @@ export async function createAnalysis(
 ): Promise<CreateAnalysisResponse> {
   const response = await fetch(`${API_BASE_URL}/api/analysis/create`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${localStorage.getItem('authing_access_token') || ''}`,
+    },
     body: JSON.stringify({
       message,
       model: options?.model ?? null,  // null 表示自动选择
@@ -210,7 +213,10 @@ export async function getSessionHistory(
 ): Promise<SessionHistoryResponse | null> {
   try {
     const response = await fetch(`${API_BASE_URL}/api/analysis/history/${sessionId}`, {
-      signal
+      signal,
+      headers: {
+        'Authorization': `Bearer ${localStorage.getItem('authing_access_token') || ''}`,
+      }
     })
 
     if (response.status === 404) {
@@ -304,7 +310,10 @@ export async function streamAnalysisTask(
 ): Promise<{ session_id: string; message_id: string }> {
   const response = await fetch(`${API_BASE_URL}/api/analysis/stream`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${localStorage.getItem('authing_access_token') || ''}`,
+    },
     body: JSON.stringify({
       message,
       model: model ?? null,  // null 表示自动选择
@@ -433,7 +442,12 @@ export async function resumeStream(
   if (lastEventId) {
     url += `&last_event_id=${encodeURIComponent(lastEventId)}`
   }
-  const response = await fetch(url, { signal })
+  const response = await fetch(url, {
+    signal,
+    headers: {
+      'Authorization': `Bearer ${localStorage.getItem('authing_access_token') || ''}`,
+    }
+  })
 
   if (!response.ok) {
     if (response.status === 404) {

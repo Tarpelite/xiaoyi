@@ -8,6 +8,7 @@ export async function getSuggestions(sessionId?: string | null): Promise<string[
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        'Authorization': `Bearer ${localStorage.getItem('authing_access_token') || ''}`,
       },
       body: JSON.stringify({
         session_id: sessionId || null,

@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import Image from 'next/image'
-import { Download, Share2, MoreVertical, Send } from 'lucide-react'
+import { Download, Share2, MoreVertical, Send, Github, ExternalLink, FileText } from 'lucide-react'
 import { MessageBubble } from './MessageBubble'
 import { QuickSuggestions } from './QuickSuggestions'
 import { AnalysisCards } from './AnalysisCards'
@@ -155,6 +155,8 @@ const defaultQuickSuggestions = [
   '生成一份投资分析报告',
 ]
 
+import { useAuth } from '@/context/AuthContext'
+
 interface ChatAreaProps {
   sessionId: string | null
   onSessionCreated?: (sessionId: string) => void
@@ -162,6 +164,7 @@ interface ChatAreaProps {
 
 export function ChatArea({ sessionId: externalSessionId, onSessionCreated }: ChatAreaProps) {
   const router = useRouter()
+  const { isAuthenticated, login, isLoading: isLoadingAuth, accessToken } = useAuth()
   const [messages, setMessages] = useState<Message[]>([])
   const [inputValue, setInputValue] = useState('')
   const [isLoading, setIsLoading] = useState(false)
@@ -627,6 +630,19 @@ export function ChatArea({ sessionId: externalSessionId, onSessionCreated }: Cha
         return
       }
 
+      // ✅ 修复异步竞态：等待 Auth 初始化完成
+      if (isLoadingAuth) {
+        // Auth 状态还在加载中，延迟执行（会通过依赖重新触发）
+        return
+      }
+
+      // ✅ 修复：未登录时不加载历史，直接清空消息
+      if (!isAuthenticated || !accessToken) {
+        setMessages([])
+        setIsLoadingHistory(false)
+        return
+      }
+
       setIsLoadingHistory(true)
 
       try {
@@ -746,7 +762,7 @@ export function ChatArea({ sessionId: externalSessionId, onSessionCreated }: Cha
     return () => {
       abortController.abort()
     }
-  }, [sessionId])
+  }, [sessionId, isAuthenticated, accessToken, isLoadingAuth]) // ✅ 添加 isLoadingAuth 依赖
 
   // 更新快速追问建议（在对话完成后）
   useEffect(() => {
@@ -1016,6 +1032,16 @@ export function ChatArea({ sessionId: externalSessionId, onSessionCreated }: Cha
   }
 
   const handleSend = async (messageOverride?: string) => {
+    // Intercept: Login Check
+    if (isLoadingAuth) {
+      return
+    }
+
+    if (!isAuthenticated) {
+      login()
+      return
+    }
+
     const messageToSend = messageOverride || inputValue
     if (!messageToSend.trim() || isLoading) return
 
@@ -1248,19 +1274,35 @@ export function ChatArea({ sessionId: externalSessionId, onSessionCreated }: Cha
 
   return (
     <main className="flex-1 flex flex-col min-w-0">
-      {/* 顶部栏 */}
-      <header className="h-14 border-b border-white/5 flex items-center justify-between px-6 bg-dark-800/30">
-        <div className="flex items-center gap-4">
-          <Image
-            src="/logo.svg"
-            alt="Logo"
-            width={28}
-            height={28}
-            className="flex-shrink-0"
-          />
-          <h2 className="text-base font-semibold">
-            小易猜猜
-          </h2>
+      {/* 顶部Header - 玻璃态效果 */}
+      <header className="h-14 border-b border-white/5 flex items-center justify-between px-6 glass sticky top-0 z-10">
+        <div className="flex items-center gap-6">
+          {/* Logo & Title */}
+          <div className="flex items-center gap-3">
+            <Image
+              src="/logo.svg"
+              alt="Logo"
+              width={28}
+              height={28}
+              className="flex-shrink-0"
+            />
+            <h2 className="text-base font-semibold">
+              小易猜猜
+            </h2>
+          </div>
+
+          {/* 产品主页链接 */}
+          <a
+            href="https://xiaoyi.actscal.org"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-1.5 text-sm text-gray-400 hover:text-violet-400 transition-colors group"
+          >
+            产品主页
+            <ExternalLink className="w-3.5 h-3.5 opacity-0 group-hover:opacity-100 transition-opacity" />
+          </a>
+
+          {/* 分析中状态 */}
           {!isEmpty && isLoading && (
             <div className="flex items-center gap-2">
               <span className="px-2 py-0.5 bg-green-500/20 text-green-400 rounded text-[10px] font-medium">
@@ -1269,19 +1311,50 @@ export function ChatArea({ sessionId: externalSessionId, onSessionCreated }: Cha
             </div>
           )}
         </div>
-        {!isEmpty && (
-          <div className="flex items-center gap-2">
-            <button className="p-2 hover:bg-dark-600 rounded-lg transition-colors" title="导出报告">
-              <Download className="w-4 h-4 text-gray-400" />
-            </button>
-            <button className="p-2 hover:bg-dark-600 rounded-lg transition-colors" title="分享">
-              <Share2 className="w-4 h-4 text-gray-400" />
-            </button>
-            <button className="p-2 hover:bg-dark-600 rounded-lg transition-colors" title="更多">
-              <MoreVertical className="w-4 h-4 text-gray-400" />
-            </button>
-          </div>
-        )}
+        {/* 右侧操作区 */}
+        <div className="flex items-center gap-2">
+          {/* GitHub 链接 */}
+          <a
+            href="https://github.com/Tarpelite/xiaoyi"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="p-2 hover:bg-white/10 rounded-lg transition-colors group relative"
+            title="Star us on GitHub"
+          >
+            <Github className="w-4 h-4 text-gray-400 group-hover:text-violet-400 transition-colors" />
+            {/* Tooltip */}
+            <span className="absolute -bottom-8 left-1/2 -translate-x-1/2 px-2 py-1 bg-dark-700 text-xs text-gray-300 rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+              Star us
+            </span>
+          </a>
+
+          {/* Docs/Demo 按钮 */}
+          <a
+            href="https://xiaoyi.actscal.org"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-violet-600/20 to-cyan-600/20 hover:from-violet-600/30 hover:to-cyan-600/30 border border-violet-500/30 rounded-lg text-sm font-medium text-violet-300 hover:text-violet-200 transition-all"
+          >
+            <FileText className="w-3.5 h-3.5" />
+            Docs/Demo
+          </a>
+
+          {/* 原有操作按钮（仅在非空状态显示） */}
+          {!isEmpty && (
+            <>
+              <div className="w-px h-4 bg-white/10 mx-1" />
+              <button className="p-2 hover:bg-white/10 rounded-lg transition-colors" title="导出报告">
+                <Download className="w-4 h-4 text-gray-400" />
+              </button>
+              <button className="p-2 hover:bg-white/10 rounded-lg transition-colors" title="分享">
+                <Share2 className="w-4 h-4 text-gray-400" />
+              </button>
+              <button className="p-2 hover:bg-white/10 rounded-lg transition-colors" title="更多">
+                <MoreVertical className="w-4 h-4 text-gray-400" />
+              </button>
+            </>
+          )}
+        </div>
       </header>
 
       {/* 对话区域 */}

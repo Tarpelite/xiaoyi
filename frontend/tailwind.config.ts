@@ -26,6 +26,16 @@ const config: Config = {
           red: '#ef4444',
         }
       },
+      fontSize: {
+        // 新的字体比例体系（基于 1.25 公比，最小18px）
+        'xs': ['18px', { lineHeight: '1.6' }],      // 最小字号 - 辅助信息
+        'sm': ['20px', { lineHeight: '1.6' }],      // 小字号 - 次要内容
+        'base': ['20px', { lineHeight: '1.6' }],    // 基准字号 - 正文
+        'lg': ['24px', { lineHeight: '1.5' }],      // 大字号 - 小标题
+        'xl': ['30px', { lineHeight: '1.4' }],      // 标题级别
+        '2xl': ['36px', { lineHeight: '1.3' }],     // 大标题
+        '3xl': ['48px', { lineHeight: '1.2' }],     // 特大标题
+      },
       fontFamily: {
         sans: [
           '-apple-system',

@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@authing/nextjs':
+        specifier: ^0.1.2
+        version: 0.1.2(next@14.2.21(react-dom@18.3.1(react@18.3.1))(react@18.3.1))
       clsx:
         specifier: ^2.1.1
         version: 2.1.1
@@ -84,6 +87,11 @@ packages:
   '@alloc/quick-lru@5.2.0':
     resolution: {integrity: sha512-UrcABB+4bUrFABwbluTIBErXwvbsU/V7TZWfmbgJfbkwiBuziS9gxdODUyuiecfdGQ85jglMW6juS3+z5TsKLw==}
     engines: {node: '>=10'}
+
+  '@authing/nextjs@0.1.2':
+    resolution: {integrity: sha512-L4C3uY7F82Urjo81R66Js2hP853EVgSlb+VLRWbMeLtZem3zeM/oWoTORZfJTOntQ9LI9K4V/q6RVsJvMR1L9Q==}
+    peerDependencies:
+      next: ^12.0.9
 
   '@babel/runtime@7.28.4':
     resolution: {integrity: sha512-Q/N6JNWvIvPnLDvjlE1OUBLPQHH6l3CltCEsHIujp45zQUSSh8K+gHnaEX45yAT1nyngnINhvWtzN+Nb9D8RAQ==}
@@ -2338,6 +2346,10 @@ packages:
 snapshots:
 
   '@alloc/quick-lru@5.2.0': {}
+
+  '@authing/nextjs@0.1.2(next@14.2.21(react-dom@18.3.1(react@18.3.1))(react@18.3.1))':
+    dependencies:
+      next: 14.2.21(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
 
   '@babel/runtime@7.28.4': {}
 

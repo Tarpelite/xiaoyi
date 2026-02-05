@@ -9,9 +9,12 @@
 'use client'
 
 import { useState } from 'react'
-import { PanelLeftClose, PanelLeft, Plus, Settings } from 'lucide-react'
+import { PanelLeftClose, PanelLeft, Plus } from 'lucide-react'
 import { SessionListItem } from './SessionListItem'
+import { UserPanel } from './UserPanel'
 import type { SessionMetadata } from '@/lib/types/session'
+
+import { useAuth } from '@/context/AuthContext'
 
 interface SidebarProps {
     sessions: SessionMetadata[]
@@ -30,6 +33,7 @@ export function Sidebar({
     onDeleteSession,
     onRenameSession,
 }: SidebarProps) {
+    const { isAuthenticated } = useAuth()
     const [collapsed, setCollapsed] = useState(false)
 
     return (
@@ -67,7 +71,11 @@ export function Sidebar({
                 {/* Middle Section - Session List */}
                 <div className="flex-1 overflow-y-auto py-2 px-2">
                     {!collapsed ? (
-                        sessions.length > 0 ? (
+                        !isAuthenticated ? (
+                            <div className="text-center text-gray-400 text-sm mt-8 px-4">
+                                登录后保存对话记录
+                            </div>
+                        ) : sessions.length > 0 ? (
                             sessions.map((session) => (
                                 <SessionListItem
                                     key={session.session_id}
@@ -101,15 +109,8 @@ export function Sidebar({
                     )}
                 </div>
 
-                {/* Bottom Section - Settings */}
-                {!collapsed && (
-                    <div className="border-t border-white/5 p-3">
-                        <button className="flex items-center gap-3 w-full px-3 py-2 hover:bg-dark-600 rounded-lg transition-colors text-sm text-gray-300">
-                            <Settings className="w-4 h-4" />
-                            Settings
-                        </button>
-                    </div>
-                )}
+                {/* Bottom Section - User Panel */}
+                {!collapsed && <UserPanel />}
             </aside>
 
             {/* Mobile Drawer - TODO: Implement drawer for mobile */}

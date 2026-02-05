@@ -287,7 +287,9 @@ class SessionData(BaseModel):
     session_id: str
     title: str = "New Chat"  # 会话标题，默认为首条消息摘要
     created_at: str
+    created_at: str
     updated_at: str
+    user_id: Optional[str] = Field(default=None, description="用户ID")
 
     # 全局配置
     model_name: Optional[str] = Field(default=None, description="使用的预测模型名称")

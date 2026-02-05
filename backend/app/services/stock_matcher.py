@@ -69,10 +69,7 @@ class StockMatcher:
                 by_name[name] = {"code": code, "market": market}
                 by_code[code] = {"name": name, "market": market}
 
-            StockMatcher._stock_cache = {
-                "by_name": by_name,
-                "by_code": by_code
-            }
+            StockMatcher._stock_cache = {"by_name": by_name, "by_code": by_code}
 
             print(f"[StockMatcher] 加载了 {len(by_name)} 只股票")
             return StockMatcher._stock_cache
@@ -105,10 +102,7 @@ class StockMatcher:
             StockMatchResult
         """
         if not stock_full_name:
-            return StockMatchResult(
-                success=False,
-                error_message="未提供股票名称"
-            )
+            return StockMatchResult(success=False, error_message="未提供股票名称")
 
         query = stock_full_name.strip()
         cache = self._load_stock_list()
@@ -119,11 +113,9 @@ class StockMatcher:
             return StockMatchResult(
                 success=True,
                 stock_info=StockInfo(
-                    stock_code=info["code"],
-                    stock_name=query,
-                    market=info["market"]
+                    stock_code=info["code"], stock_name=query, market=info["market"]
                 ),
-                confidence=1.0
+                confidence=1.0,
             )
 
         # 2. 尝试按代码精确匹配
@@ -132,11 +124,9 @@ class StockMatcher:
             return StockMatchResult(
                 success=True,
                 stock_info=StockInfo(
-                    stock_code=query,
-                    stock_name=info["name"],
-                    market=info["market"]
+                    stock_code=query, stock_name=info["name"], market=info["market"]
                 ),
-                confidence=1.0
+                confidence=1.0,
             )
 
         # 3. 尝试模糊匹配 (名称包含)
@@ -151,11 +141,9 @@ class StockMatcher:
             return StockMatchResult(
                 success=True,
                 stock_info=StockInfo(
-                    stock_code=info["code"],
-                    stock_name=name,
-                    market=info["market"]
+                    stock_code=info["code"], stock_name=name, market=info["market"]
                 ),
-                confidence=0.9
+                confidence=0.9,
             )
         elif len(matches) > 1:
             # 多个匹配，返回建议
@@ -163,13 +151,13 @@ class StockMatcher:
             return StockMatchResult(
                 success=False,
                 suggestions=suggestions,
-                error_message=f"找到多个匹配，你可能说的是: {', '.join(suggestions)}?"
+                error_message=f"找到多个匹配，你可能说的是: {', '.join(suggestions)}?",
             )
 
         # 4. 无匹配
         return StockMatchResult(
             success=False,
-            error_message=f"未找到股票「{query}」，请检查股票名称是否正确。目前仅支持 A 股。"
+            error_message=f"未找到股票「{query}」，请检查股票名称是否正确。目前仅支持 A 股。",
         )
 
     def refresh_cache(self):

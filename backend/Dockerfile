@@ -47,8 +47,8 @@ RUN uv sync \
     --index-url https://mirrors.aliyun.com/pypi/simple/
 
 # 5. 复制业务代码与配置
-# 复制生成的 .env 文件（确保 GitHub Actions 已生成该文件）
-COPY backend/.env* ./
+# 【关键修改】从根目录复制 .env.example 作为模板（实际 .env 通过 volume 挂载）
+COPY .env.example ./
 # 复制应用逻辑
 COPY backend/app ./app
 COPY backend/scripts ./scripts

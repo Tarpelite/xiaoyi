@@ -1230,7 +1230,7 @@ function InteractiveChart({ content }: { content: ChartContent }) {
             value={displayRate} // Use re-calculated rate
             position="insideTop"
             fill={fill}
-            fontSize={10}
+            fontSize={18}
             className="font-mono font-bold opacity-70"
           />
         </ReferenceArea>
@@ -1493,7 +1493,7 @@ function InteractiveChart({ content }: { content: ChartContent }) {
             <XAxis
               dataKey="name"
               stroke="#6b7280"
-              style={{ fontSize: '12px' }}
+              style={{ fontSize: '20px' }}
               angle={isZoomed ? -45 : 0}
               textAnchor={isZoomed ? "end" : "middle"}
               height={isZoomed ? 60 : 30}
@@ -1508,7 +1508,7 @@ function InteractiveChart({ content }: { content: ChartContent }) {
                   {/* Short vertical line above axis (upwards) - Explicitly inside chart, High Contrast */}
                   <line x1={0} y1={0} x2={0} y2={-10} stroke="#ffffff" strokeWidth={2} strokeOpacity={0.6} />
                   {/* Rotated text to prevent overlap */}
-                  <text x={0} y={20} dy={0} textAnchor="end" transform={`rotate(-45, 0, 20)`} fill="#9ca3af" fontSize={10} fontFamily="monospace">
+                  <text x={0} y={20} dy={0} textAnchor="end" transform={`rotate(-45, 0, 20)`} fill="#9ca3af" fontSize={18} fontFamily="monospace">
                     {payload.value}
                   </text>
                 </g>
@@ -1518,7 +1518,7 @@ function InteractiveChart({ content }: { content: ChartContent }) {
 
             <YAxis
               stroke="#6b7280"
-              style={{ fontSize: '12px' }}
+              style={{ fontSize: '20px' }}
               domain={yAxisDomain}
               allowDataOverflow={false}
               padding={{ top: 10, bottom: 10 }} // Add separate padding here if needed instead of domain math
@@ -1549,7 +1549,7 @@ function InteractiveChart({ content }: { content: ChartContent }) {
               isAnimationActive={false}
             />
             <Legend
-              wrapperStyle={{ fontSize: '12px' }}
+              wrapperStyle={{ fontSize: '20px' }}
             />
             {/* 1. Semantic Regimes (Memoized) */}
             {semanticZoneElements}
@@ -1575,7 +1575,7 @@ function InteractiveChart({ content }: { content: ChartContent }) {
                     value: dataValue.toFixed(2),
                     position: 'right',
                     fill: '#60a5fa',
-                    fontSize: 10
+                    fontSize: 18
                   }}
                 />
               )

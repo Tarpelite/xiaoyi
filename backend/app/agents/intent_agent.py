@@ -216,14 +216,14 @@ class IntentAgent(BaseAgent):
             history_days=result.get("history_days", 365),
             forecast_horizon=result.get("forecast_horizon", 30),
             reason=result.get("reason", ""),
-            out_of_scope_reply=result.get("out_of_scope_reply")
+            out_of_scope_reply=result.get("out_of_scope_reply"),
         )
 
     def recognize_intent_streaming(
         self,
         user_query: str,
         conversation_history: Optional[List[Dict[str, str]]] = None,
-        on_thinking_chunk: Optional[Callable[[str], None]] = None
+        on_thinking_chunk: Optional[Callable[[str], None]] = None,
     ) -> Tuple[UnifiedIntent, str]:
         """
         流式意图识别 - 实时返回思考过程
@@ -239,7 +239,7 @@ class IntentAgent(BaseAgent):
         messages = self.build_messages(
             user_content=f"用户问题: {user_query}\n\n请分析意图。",
             system_prompt=self.STREAMING_SYSTEM_PROMPT,
-            conversation_history=conversation_history
+            conversation_history=conversation_history,
         )
 
         # 使用状态变量跟踪是否进入 JSON 块
@@ -250,7 +250,9 @@ class IntentAgent(BaseAgent):
 
             if "```json" in state["full_content"] and not state["in_json_block"]:
                 state["in_json_block"] = True
-                state["thinking_content"] = state["full_content"].split("```json")[0].strip()
+                state["thinking_content"] = (
+                    state["full_content"].split("```json")[0].strip()
+                )
 
             if not state["in_json_block"] and on_thinking_chunk:
                 on_thinking_chunk(delta)
@@ -271,7 +273,7 @@ class IntentAgent(BaseAgent):
             result = {
                 "is_in_scope": True,
                 "is_forecast": False,
-                "reason": "解析失败，使用默认值"
+                "reason": "解析失败，使用默认值",
             }
 
         thinking_content = state["thinking_content"]
@@ -284,7 +286,7 @@ class IntentAgent(BaseAgent):
         self,
         intent: UnifiedIntent,
         stock_name: Optional[str] = None,
-        stock_code: Optional[str] = None
+        stock_code: Optional[str] = None,
     ) -> ResolvedKeywords:
         """
         根据股票匹配结果解析最终关键词
@@ -303,7 +305,7 @@ class IntentAgent(BaseAgent):
             return ResolvedKeywords(
                 search_keywords=intent.raw_search_keywords,
                 rag_keywords=intent.raw_rag_keywords,
-                domain_keywords=intent.raw_domain_keywords
+                domain_keywords=intent.raw_domain_keywords,
             )
 
         search_keywords = list(intent.raw_search_keywords)
@@ -338,7 +340,7 @@ class IntentAgent(BaseAgent):
         return ResolvedKeywords(
             search_keywords=search_keywords,
             rag_keywords=rag_keywords,
-            domain_keywords=domain_keywords
+            domain_keywords=domain_keywords,
         )
 
     def generate_chat_response(
@@ -346,7 +348,7 @@ class IntentAgent(BaseAgent):
         user_query: str,
         conversation_history: Optional[List[Dict[str, str]]] = None,
         context: Optional[str] = None,
-        stream: bool = False
+        stream: bool = False,
     ):
         """
         生成聊天回复 (非预测流程)
@@ -368,7 +370,7 @@ class IntentAgent(BaseAgent):
             user_content=user_content,
             system_prompt=self.CHAT_SYSTEM_PROMPT,
             conversation_history=conversation_history,
-            history_window=10
+            history_window=10,
         )
 
         if stream:
@@ -380,10 +382,7 @@ class IntentAgent(BaseAgent):
         """流式响应 - 生成器模式"""
         # 使用底层 client 直接调用以支持生成器模式
         response = self.client.chat.completions.create(
-            model=self.model,
-            messages=messages,
-            temperature=0.3,
-            stream=True
+            model=self.model, messages=messages, temperature=0.3, stream=True
         )
 
         for chunk in response:

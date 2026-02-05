@@ -10,6 +10,7 @@
     "format": "prettier --write ."
   },
   "dependencies": {
+    "@authing/nextjs": "^0.1.2",
     "clsx": "^2.1.1",
     "framer-motion": "^12.28.1",
     "lucide-react": "^0.468.0",
