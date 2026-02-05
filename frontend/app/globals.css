@@ -8,6 +8,8 @@
 }
 
 body {
+  font-size: 20px;  /* 基准字号 */
+  line-height: 1.6; /* 优化行高 */
   color: var(--foreground);
   background: var(--background);
 }

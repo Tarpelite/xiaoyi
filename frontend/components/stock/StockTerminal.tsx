@@ -491,8 +491,8 @@ export const StockTerminal: React.FC<{ ticker?: string; initialDate?: string }> 
                       </linearGradient>
                     </defs>
                     <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
-                    <XAxis dataKey="date" stroke="#64748b" tick={{ fill: '#64748b', fontSize: 12 }} tickFormatter={formatDate} tickLine={false} axisLine={false} />
-                    <YAxis stroke="#64748b" tick={{ fill: '#64748b', fontSize: 12 }} tickFormatter={(v) => v.toFixed(2)} tickLine={false} axisLine={false} domain={['auto', 'auto']} />
+                    <XAxis dataKey="date" stroke="#64748b" tick={{ fill: '#64748b', fontSize: 20 }} tickFormatter={formatDate} tickLine={false} axisLine={false} />
+                    <YAxis stroke="#64748b" tick={{ fill: '#64748b', fontSize: 20 }} tickFormatter={(v) => v.toFixed(2)} tickLine={false} axisLine={false} domain={['auto', 'auto']} />
                     <Tooltip content={<CustomTooltip />} />
 
                     {/* Render Filtered Zones */}

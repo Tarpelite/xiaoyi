@@ -372,7 +372,7 @@ export function StockWidget({ ticker, title }: StockWidgetProps) {
                                     </defs>
                                     <CartesianGrid strokeDasharray="3 3" stroke="#3a3a4a" vertical={false} />
                                     <XAxis dataKey="date" hide />
-                                    <YAxis stroke="#6b7280" tick={{ fill: '#6b7280', fontSize: 11 }} tickFormatter={(v) => v.toFixed(2)} tickLine={false} axisLine={false} domain={['auto', 'auto']} />
+                                    <YAxis stroke="#6b7280" tick={{ fill: '#6b7280', fontSize: 18 }} tickFormatter={(v) => v.toFixed(2)} tickLine={false} axisLine={false} domain={['auto', 'auto']} />
                                     <Tooltip content={<CustomTooltip />} />
 
                                     {/* Render Filtered Zones */}
