@@ -99,12 +99,15 @@ cp backend/.env.example backend/.env
 #### 2. 配置 Docker 环境变量
 ```bash
 cp .env.example .env
-# 编辑 .env 修改 NEXT_PUBLIC_API_URL 和 SERVER_IP (通常保持默认即可)
+# 编辑 .env 并设置 NEXT_PUBLIC_API_URL 为对外可达地址（如 http://your-server-ip-or-domain:18000）
+# 【重要】此变量在构建阶段硬编码进前端产物；本机访问可保持默认 localhost，
+# 但若部署到服务器供他人访问，必须在构建前改为实际的服务器 IP 或域名
 ```
 
 #### 3. 启动服务
 ```bash
-docker-compose up -d --build
+docker compose up -d --build
+# 如使用旧版 docker-compose: docker-compose up -d --build
 ```
 
 启动后访问：
