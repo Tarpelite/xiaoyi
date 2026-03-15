@@ -6,6 +6,7 @@ Report Agent 模块
 """
 
 from typing import Dict, Any, List, Optional
+from app.agents.agent_config import agent_settings
 
 from .base import BaseAgent
 
@@ -13,7 +14,9 @@ from .base import BaseAgent
 class ReportAgent(BaseAgent):
     """分析报告生成 Agent"""
 
-    DEFAULT_TEMPERATURE = 0.3
+    DEFAULT_TEMPERATURE = agent_settings.report.temperature
+    DEFAULT_MAX_TOKENS = agent_settings.report.max_tokens
+    DEFAULT_HISTORY_WINDOW = agent_settings.report.history_window
 
     SYSTEM_PROMPT = """你是资深的金融分析师。你的任务是生成自然段格式的分析报告，而非要点列表。
 

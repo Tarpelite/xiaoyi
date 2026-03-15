@@ -6,6 +6,7 @@
 """
 
 from typing import Dict, Any, Callable, Optional
+from app.agents.agent_config import agent_settings
 
 from .base import BaseAgent
 
@@ -13,7 +14,9 @@ from .base import BaseAgent
 class SentimentAgent(BaseAgent):
     """新闻情绪分析 Agent（流式输出）"""
 
-    DEFAULT_TEMPERATURE = 0.2
+    DEFAULT_TEMPERATURE = agent_settings.sentiment.temperature
+    DEFAULT_MAX_TOKENS = agent_settings.sentiment.max_tokens
+    DEFAULT_HISTORY_WINDOW = agent_settings.sentiment.history_window
 
     SYSTEM_PROMPT = """你是金融情绪分析专家。分析以下股票新闻，给出情绪判断和分析说明。
 

@@ -6,6 +6,7 @@
 """
 
 from typing import List, Dict, Optional
+from app.agents.agent_config import agent_settings
 
 from .base import BaseAgent
 
@@ -13,7 +14,9 @@ from .base import BaseAgent
 class SuggestionAgent(BaseAgent):
     """快速追问建议生成 Agent"""
 
-    DEFAULT_TEMPERATURE = 0.7
+    DEFAULT_TEMPERATURE = agent_settings.suggestion.temperature
+    DEFAULT_MAX_TOKENS = agent_settings.suggestion.max_tokens
+    DEFAULT_HISTORY_WINDOW = agent_settings.suggestion.history_window
 
     SYSTEM_PROMPT = """你是金融分析助手的快速追问建议生成器。根据对话历史，生成4个相关的快速追问建议。
 
