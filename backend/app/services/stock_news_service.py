@@ -2,167 +2,17 @@ from typing import List, Dict, Optional, Any, Tuple
 import json
 import pandas as pd
 from datetime import datetime, timedelta
-from app.core.redis_client import get_redis
+
 from app.core.config import settings
 from app.data.stock_db import get_mongo_client, ensure_mongodb_indexes, NewsItem
 from app.services.stock_signal_service import StockSignalService
 
-REDIS_KEY_PREFIX = settings.REDIS_KEY_PREFIX
-
-# Redis Helpers
-def make_redis_key(key_type: str, ticker: str, **kwargs) -> str:
-    key_parts = [REDIS_KEY_PREFIX, key_type, ticker]
-    for k, v in sorted(kwargs.items()):
-        key_parts.append(f"{k}={v}")
-    return ":".join(key_parts)
-
-def cache_get(key: str) -> Optional[Any]:
-    try:
-        redis_client = get_redis()
-        data = redis_client.get(key)
-        if data:
-            return json.loads(data)
-    except Exception as e:
-        print(f"Redis get error: {e}")
-    return None
-
-def cache_set(key: str, data: Any, ttl: int = 3600) -> bool:
-    try:
-        redis_client = get_redis()
-        redis_client.setex(key, ttl, json.dumps(data, ensure_ascii=False))
-        return True
-    except Exception as e:
-        print(f"Redis set error: {e}")
-    return False
-
-# Calculation Helpers
-def calculate_score(read_count: int, comment_count: int) -> float:
-    return read_count + comment_count * 5
-
-def generate_price_points(close_prices: List[float], dates: List[str]) -> List[dict]:
-    if not close_prices or not dates:
-        return []
-
-    price_data = []
-    for i, (close, date) in enumerate(zip(close_prices, dates)):
-        # Simulate OHLC data for demo/fallback (ensure close is real)
-        open_price = close * (0.98 + 0.04 * (hash(date) % 100) / 100)
-        high_price = close * (1.01 + 0.02 * (hash(date) % 50) / 100)
-        low_price = close * (0.99 - 0.02 * (hash(date) % 50) / 100)
-
-        price_data.append(
-            {
-                "date": date,
-                "open": round(open_price, 2),
-                "high": round(high_price, 2),
-                "low": round(low_price, 2),
-                "close": round(close, 2),
-                "volume": 1000000 + hash(date) % 10000000,
-                "is_event_triggered": False,
-            }
-        )
-
-    return price_data
-
-def classify_turn_type(prices: List[float], index: int) -> str:
-    if index < 2 or index >= len(prices) - 2:
-        return "波动"
-
-    before = prices[index - 2 : index]
-    after = prices[index + 1 : index + 3]
-
-    before_avg = sum(before) / len(before) if before else prices[index]
-    after_avg = sum(after) / len(after) if after else prices[index]
-    current = prices[index]
-
-    if after_avg > before_avg * 1.03 and current < before_avg:
-        return "V型反转"
-    elif after_avg < before_avg * 0.97 and current > before_avg:
-        return "倒V型反转"
-    elif current > before_avg * 1.05:
-        return "强势上涨"
-    elif current < before_avg * 0.95:
-        return "强势下跌"
-    else:
-        return "波动"
-
-def merge_adjacent_zones(zones: List[dict], dates: List[str]) -> List[dict]:
-    if not zones:
-        return []
-
-    merged = []
-    dates_set = set()
-    for zone in zones:
-        zone_dates = {zone["startDate"], zone["endDate"]}
-        for d in dates:
-            if d >= zone["startDate"] and d <= zone["endDate"]:
-                zone_dates.add(d)
-
-        overlapping = False
-        for m in merged[:]:
-            if m["startDate"] in zone_dates or zone["startDate"] in dates_set:
-                m["startDate"] = min(m["startDate"], zone["startDate"])
-                m["endDate"] = max(m["endDate"], zone["endDate"])
-                zone_dates.add(m["startDate"])
-                zone_dates.add(m["endDate"])
-                overlapping = True
-                break
-
-        if not overlapping:
-            merged.append(zone)
-
-        dates_set.update(zone_dates)
-
-    return merged
-
-def detect_turning_points(
-    prices: List[float], dates: List[str], threshold: float = 0.05
-) -> List[dict]:
-    """
-    Detect anomaly zones based on volatility > 2 standard deviations
-    (Fallback / Legacy implementation)
-    """
-    if len(prices) < 5:
-        return []
-
-    # Calculate historical volatility (returns-based)
-    returns = [
-        (prices[i] - prices[i - 1]) / prices[i - 1] for i in range(1, len(prices))
-    ]
-    mean_return = sum(returns) / len(returns) if returns else 0
-    std_dev = (
-        (sum((r - mean_return) ** 2 for r in returns) / len(returns)) ** 0.5
-        if returns
-        else 0
-    )
-
-    if std_dev == 0:
-        std_dev = 0.01  # Prevent division by zero
-
-    anomaly_zones = []
-    volatility_threshold = 2 * std_dev  # 2σ threshold
-
-    for i in range(1, len(prices)):
-        daily_return = abs((prices[i] - prices[i - 1]) / prices[i - 1])
-
-        # Trigger when volatility exceeds 2σ
-        if daily_return > volatility_threshold:
-            start_idx = max(0, i - 1)
-            end_idx = min(len(prices) - 1, i + 1)
-
-            anomaly_zones.append(
-                {
-                    "startDate": dates[start_idx],
-                    "endDate": dates[end_idx],
-                    "turnType": classify_turn_type(prices, i),
-                    "changePercent": round(daily_return * 100, 2),
-                    "volatility": round(daily_return / std_dev, 2),  # sigma multiple
-                }
-            )
-
-    merged_zones = merge_adjacent_zones(anomaly_zones, dates)
-
-    return merged_zones
+from app.utils.cache import make_redis_key, cache_get, cache_set
+from app.utils.stock_analysis import (
+    calculate_score,
+    generate_price_points,
+    detect_turning_points
+)
 
 class StockNewsService:
     def __init__(self):
@@ -237,21 +87,49 @@ class StockNewsService:
                             dates.append(date_key)
                     except (ValueError, TypeError):
                         pass
-
+            # 生成价格数据点
             price_data = generate_price_points(close_prices, dates) if close_prices else []
 
+            # 使用新的 SignificantPointService (now StockSignalService) 算法
+            # Note: Will be updated to use StockSignalService in next step but for now keeping compatible or I should update it now?
+            # Since I haven't created StockSignalService yet, I will use try-except or just keep the old one if it still exists?
+            # Actually I planned to remove SignificantPointService. So I should create StockSignalService first or update this to use it after creating it.
+            # But I'm writing this file now. I will try to use the new service name assuming I will create it momentarily.
+
             try:
+                # 构建 DataFrame
                 df = pd.DataFrame({
                     "date": dates,
                     "close": close_prices,
                     "volume": volumes if volumes else [1] * len(close_prices),
                 })
-                
+
+                # 计算每日新闻数量
                 news_counts = {
                     date: len(news_list) for date, news_list in news_by_date.items()
                 }
 
+                # 计算显著点 & 异常区域
+                # Use new method from consolidated service
+                # Assuming interface: generate_zones(df, news_counts) similar to dynamic_clustering
+                # But significant_points also returned individual points.
+                # I will design StockSignalService to have methods covering both needs.
                 anomaly_zones = self.signal_service.generate_zones(df, news_counts)
+
+                # Map zones to format expected if needed, or if generate_zones returns compatible format.
+                # The previous code used sig_service.calculate_points then generate_anomaly_zones.
+                # DynamicClusteringService's generate_zones returns enriched zones.
+
+                # 标记事件触发的价格点
+                # We need to identity which points are significant.
+                # I will ensure StockSignalService puts date or similar info in zones or provides a method.
+
+                # For now let's assume generate_zones returns what we need for zones.
+                # And for points marking, we can infer from zones or add a method.
+
+                # Simple logic: if a date is within an anomaly zone, mark it?
+                # Or use explicit significant points. I'll add calculate_points to the new service too.
+
                 significant_points = self.signal_service.calculate_points(df, news_counts, top_k=8)
                 sig_dates = set([sp["date"] for sp in significant_points])
 
@@ -261,8 +139,10 @@ class StockNewsService:
 
             except Exception as e:
                 print(f"[StockSignalService] Error: {e}")
+                # 降级到旧算法
                 anomaly_zones = detect_turning_points(close_prices, dates)
 
+            # 为异常区域添加新闻摘要 (If not already present)
             for zone in anomaly_zones:
                 if "summary" in zone and zone["summary"]:
                     continue
@@ -282,11 +162,13 @@ class StockNewsService:
                 except Exception:
                     pass
 
+                # 如果没有新闻标题，使用算法生成的 summary
                 if not zone_titles and "summary" not in zone:
                     zone["summary"] = "价格波动区间"
                 elif not zone.get("summary"):
                     zone["summary"] = " | ".join(zone_titles[:5])
 
+            # 选择显著新闻（按评分排序）
             significant_news = []
             scored_news = []
             for news in all_news:
@@ -345,15 +227,28 @@ class StockNewsService:
         client = None
         try:
             client = get_mongo_client()
+            # 使用配置中的数据库和collection
             db = client[settings.MONGODB_DATABASE]
             collection = db[settings.MONGODB_COLLECTION]
+            print(
+            f"[NewsAPI] Connected to MongoDB: {settings.MONGODB_DATABASE}.{settings.MONGODB_COLLECTION}"
+            )
 
+            # 检查collection是否存在数据
             target_date = datetime.strptime(date, "%Y-%m-%d")
+
+            # 先查询一条样本查看格式
+            sample = collection.find_one({"stock_code": ticker})
+            if sample:
+                print(f"[NewsAPI] Sample publish_time: '{sample.get('publish_time')}'")
+
+            # 生成目标日期列表（前后date_range天）
             date_patterns = []
             for i in range(-date_range, date_range + 1):
                 date_str = (target_date + timedelta(days=i)).strftime("%Y-%m-%d")
                 date_patterns.append(date_str)
 
+            # 使用正则表达式匹配任何以这些日期开头的publish_time，同时过滤stock_code
             regex_pattern = "^(" + "|".join(date_patterns) + ")"
             cursor = collection.find(
                 {"stock_code": ticker, "publish_time": {"$regex": regex_pattern}}
@@ -361,8 +256,17 @@ class StockNewsService:
 
             news_list = []
             for news in cursor:
+                # 安全处理可能为None的数值字段
                 read_cnt = news.get("read_count", 0) or 0
                 comment_cnt = news.get("comment_count", 0) or 0
+
+                # 确保是数字类型
+                if read_cnt is None:
+                    read_cnt = 0
+                if comment_cnt is None:
+                    comment_cnt = 0
+
+
                 score = calculate_score(read_cnt, comment_cnt)
                 news_list.append({**news, "id": str(news.get("_id", "")), "score": score})
 
@@ -410,8 +314,10 @@ class StockNewsService:
         cache_key = make_redis_key("zones", ticker, days=str(days))
         cached = cache_get(cache_key)
         if cached:
+            print(f"[Redis HIT] {cache_key}")
             return cached
 
+        print(f"[Redis MISS] {cache_key}")
         client = None
         try:
             client = get_mongo_client()
