@@ -10,12 +10,15 @@ from typing import Dict, Any, List, Tuple
 
 from .base import BaseAgent
 from app.schemas.session_schema import NewsItem, SummarizedNewsItem
+from app.agents.agent_config import agent_settings
 
 
 class NewsSummaryAgent(BaseAgent):
     """新闻总结 Agent - 批量总结新闻标题和内容"""
 
-    DEFAULT_TEMPERATURE = 0.3
+    DEFAULT_TEMPERATURE = agent_settings.news_summary.temperature
+    DEFAULT_MAX_TOKENS = agent_settings.news_summary.max_tokens
+    DEFAULT_HISTORY_WINDOW = agent_settings.news_summary.history_window
 
     def summarize(self, news_items: List[NewsItem]) -> Tuple[List[SummarizedNewsItem], str]:
         """

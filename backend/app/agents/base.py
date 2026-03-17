@@ -12,6 +12,7 @@ from typing import List, Dict, Any, Optional, Callable
 from openai import OpenAI
 
 from app.core.config import settings
+from app.agents.agent_config import agent_settings
 
 
 class BaseAgent(ABC):
@@ -26,17 +27,19 @@ class BaseAgent(ABC):
     5. 统一的 JSON 解析
     """
 
-    DEFAULT_MODEL = "deepseek-chat"
-    DEFAULT_BASE_URL = "https://api.deepseek.com"
-    DEFAULT_TEMPERATURE = 0.3
-    DEFAULT_HISTORY_WINDOW = 6
+    DEFAULT_MODEL = agent_settings.default.model
+    DEFAULT_BASE_URL = agent_settings.default.base_url
+    DEFAULT_TEMPERATURE = agent_settings.default.temperature
+    DEFAULT_HISTORY_WINDOW = agent_settings.default.history_window
+    DEFAULT_MAX_TOKENS = agent_settings.default.max_tokens
 
     def __init__(
         self,
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
         model: Optional[str] = None,
-        temperature: Optional[float] = None
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None
     ):
         """
         初始化 Agent
@@ -51,6 +54,7 @@ class BaseAgent(ABC):
         self.base_url = base_url or self.DEFAULT_BASE_URL
         self.model = model or self.DEFAULT_MODEL
         self.temperature = temperature if temperature is not None else self.DEFAULT_TEMPERATURE
+        self.max_tokens = max_tokens if max_tokens is not None else self.DEFAULT_MAX_TOKENS
         self.client = OpenAI(api_key=self.api_key, base_url=self.base_url)
 
     @property
@@ -92,8 +96,10 @@ class BaseAgent(ABC):
         }
         if response_format:
             kwargs["response_format"] = response_format
-        if max_tokens:
-            kwargs["max_tokens"] = max_tokens
+        
+        final_max_tokens = max_tokens if max_tokens is not None else self.max_tokens
+        if final_max_tokens:
+            kwargs["max_tokens"] = final_max_tokens
 
         try:
             response = self.client.chat.completions.create(**kwargs)

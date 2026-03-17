@@ -9,6 +9,7 @@
 from typing import List, Dict
 from datetime import datetime
 from openai import OpenAI
+from app.agents.agent_config import agent_settings
 
 
 class EventSummaryAgent:
@@ -36,7 +37,7 @@ class EventSummaryAgent:
         if not self.api_key:
             raise ValueError("DEEPSEEK_API_KEY not found in environment")
 
-        self.client = OpenAI(api_key=self.api_key, base_url="https://api.deepseek.com")
+        self.client = OpenAI(api_key=self.api_key, base_url=agent_settings.event_summary.base_url)
 
     def summarize_zone(
         self, zone_dates: List[str], price_change: float, news_items: List[Dict]
@@ -92,7 +93,7 @@ class EventSummaryAgent:
 
         try:
             response = self.client.chat.completions.create(
-                model="deepseek-chat",
+                model=agent_settings.event_summary.model,
                 messages=[
                     {
                         "role": "system",
@@ -100,8 +101,8 @@ class EventSummaryAgent:
                     },
                     {"role": "user", "content": prompt},
                 ],
-                max_tokens=100,
-                temperature=0.3,  # 降低随机性，确保专业性
+                max_tokens=agent_settings.event_summary.max_tokens,
+                temperature=agent_settings.event_summary.temperature,
             )
 
             summary = response.choices[0].message.content.strip()

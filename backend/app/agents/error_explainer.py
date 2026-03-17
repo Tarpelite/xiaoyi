@@ -5,6 +5,7 @@ Error Explainer Agent 模块
 负责将技术错误转换为用户友好的解释
 """
 
+from app.agents.agent_config import agent_settings
 from .base import BaseAgent
 from app.data.fetcher import DataFetchError
 
@@ -12,7 +13,9 @@ from app.data.fetcher import DataFetchError
 class ErrorExplainerAgent(BaseAgent):
     """错误解释 Agent - 将技术错误转换为友好的用户解释"""
 
-    DEFAULT_TEMPERATURE = 0.7
+    DEFAULT_TEMPERATURE = agent_settings.error_explainer.temperature
+    DEFAULT_MAX_TOKENS = agent_settings.error_explainer.max_tokens
+    DEFAULT_HISTORY_WINDOW = agent_settings.error_explainer.history_window
 
     SYSTEM_PROMPT = "你是小易，一个专业且友好的金融分析助手。你擅长用简单易懂的方式解释技术问题，并给出实用建议。"
 

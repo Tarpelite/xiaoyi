@@ -16,12 +16,15 @@ import json
 
 from .base import BaseAgent
 from app.schemas.session_schema import UnifiedIntent, ResolvedKeywords
+from app.agents.agent_config import agent_settings
 
 
 class IntentAgent(BaseAgent):
     """统一意图识别 Agent"""
 
-    DEFAULT_TEMPERATURE = 0.1
+    DEFAULT_TEMPERATURE = agent_settings.intent.temperature
+    DEFAULT_MAX_TOKENS = agent_settings.intent.max_tokens
+    DEFAULT_HISTORY_WINDOW = agent_settings.intent.history_window
 
     INTENT_SYSTEM_PROMPT = """你是金融时序分析助手的意图识别模块。根据用户问题，一次性判断所有意图信息。
 
