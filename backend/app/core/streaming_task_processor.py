@@ -508,6 +508,15 @@ class StreamingTaskProcessor:
         )
         if rag_sources:
             message.save_rag_sources(rag_sources)
+            await self._emit_event(
+                event_queue,
+                message,
+                {
+                    "type": "data",
+                    "data_type": "rag_sources",
+                    "data": [source.model_dump() for source in rag_sources],
+                },
+            )
 
         # === 计算异常区域（在Step 3完成前，确保resume时能获取到）===
         print(
@@ -1593,6 +1602,15 @@ class StreamingTaskProcessor:
 
         if "rag" in results:
             message.save_rag_sources(results["rag"])
+            await self._emit_event(
+                event_queue,
+                message,
+                {
+                    "type": "data",
+                    "data_type": "rag_sources",
+                    "data": [source.model_dump() for source in results["rag"]],
+                },
+            )
 
         await self._emit_event(
             event_queue,

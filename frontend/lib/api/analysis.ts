@@ -258,7 +258,7 @@ export interface FullStreamEvent {
   step?: number
   step_name?: string
   content?: string
-  data_type?: 'time_series_original' | 'time_series_full' | 'news' | 'emotion' | 'anomaly_zones'
+  data_type?: 'time_series_original' | 'time_series_full' | 'news' | 'emotion' | 'anomaly_zones' | 'rag_sources'
   data?: unknown
   prediction_start_day?: string
   intent?: string
@@ -504,6 +504,14 @@ export async function resumeStream(
 
               case 'thinking':
                 callbacks.onThinking?.(event.content || '')
+                break
+
+              case 'intent':
+                callbacks.onIntent?.(
+                  event.intent || '',
+                  event.is_forecast || false,
+                  event.reason || ''
+                )
                 break
 
               case 'data':

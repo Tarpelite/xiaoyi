@@ -193,10 +193,10 @@ export function MessageBubble({ message, onRegenerateMessage }: MessageBubblePro
                 )
               }
 
-              // 只有 forecast 模式才考虑步骤进度条
-              const hasSteps = renderMode === 'forecast' && message.steps && message.steps.length > 0
+              const hasSteps = Boolean(message.steps && message.steps.length > 0)
 
-              if (hasContents || displayText || hasSteps) {
+              // 仅在有实际内容时渲染结构化预测面板，避免 thinking 阶段出现闪烁占位卡片。
+              if (hasContents || displayText) {
                 // 分类内容：图表、表格、文本
                 const charts = contents.filter(c => c.type === 'chart')
                 const tables = contents.filter(c => c.type === 'table')
@@ -294,6 +294,11 @@ export function MessageBubble({ message, onRegenerateMessage }: MessageBubblePro
                   )
                 ) || tables[0]
 
+                const ragRetrievalFinished = Boolean(
+                  reportText ||
+                  (message.steps && message.steps.every(s => s.status === 'completed' || s.status === 'failed'))
+                )
+
                 // 解析情绪数据
                 let emotionData: { score: number; description: string } | null = null
                 if (emotionText && emotionText.type === 'text') {
@@ -367,6 +372,15 @@ export function MessageBubble({ message, onRegenerateMessage }: MessageBubblePro
                             </h3>
                             <div className="flex-1 overflow-y-auto">
                               <RAGSourceCard sources={message.ragSources} />
+                            </div>
+                          </div>
+                        ) : ragRetrievalFinished ? (
+                          <div className="glass rounded-2xl p-4 overflow-hidden flex flex-col">
+                            <h3 className="text-sm font-semibold text-gray-300 mb-3 flex items-center gap-2 flex-shrink-0">
+                              <span>📚</span> 研报来源
+                            </h3>
+                            <div className="flex-1 flex items-center justify-center text-sm text-gray-500">
+                              暂未检索到相关研报
                             </div>
                           </div>
                         ) : (

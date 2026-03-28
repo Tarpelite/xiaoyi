@@ -478,6 +478,13 @@ export function ChatArea({ sessionId: externalSessionId, onSessionCreated }: Cha
         } else if (dataType === 'anomalies') {
           accumulatedAnomalies = data as any[];
           updateContentsFromStreamData(assistantMessageId, accumulatedTimeSeriesOriginal, accumulatedTimeSeriesFull.length > 0 ? accumulatedTimeSeriesFull : null, accumulatedNews, accumulatedEmotion, null, predictionStartDay, backendSessionId, backendMessageId, accumulatedAnomalyZones, stockTicker, accumulatedAnomalies, accumulatedSemanticZones, accumulatedPredictionSemanticZones)
+        } else if (dataType === 'rag_sources') {
+          const ragSources = Array.isArray(data) ? (data as RAGSource[]) : []
+          setMessages((prev: Message[]) => prev.map((msg: Message) =>
+            msg.id === assistantMessageId
+              ? { ...msg, ragSources }
+              : msg
+          ))
         }
       },
 
@@ -549,7 +556,14 @@ export function ChatArea({ sessionId: externalSessionId, onSessionCreated }: Cha
       onDone: () => {
         setMessages((prev: Message[]) => prev.map((msg: Message) =>
           msg.id === assistantMessageId
-            ? { ...msg, steps: undefined }
+            ? {
+              ...msg,
+              steps: msg.steps?.map((s) =>
+                s.status === 'failed'
+                  ? s
+                  : { ...s, status: 'completed' as StepStatus, message: '已完成' }
+              )
+            }
             : msg
         ))
         setIsLoading(false)
