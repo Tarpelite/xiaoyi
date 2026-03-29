@@ -86,6 +86,34 @@ pnpm run dev
 
 > **注意**: 前端 API 请求默认通过 Next.js Proxy (`/api` -> `http://127.0.0.1:8000`) 转发，请确保后端正常运行在 8000 端口。
 
+### 4. Docker 启动 (容器化部署)
+
+如果您希望快速部署完整环境，推荐使用 Docker Compose。
+
+#### 1. 配置后端环境
+```bash
+cp backend/.env.example backend/.env
+# 编辑 backend/.env 填入 API Key、数据库配置等
+```
+
+#### 2. 配置 Docker 环境变量
+```bash
+cp .env.example .env
+# 编辑 .env 并设置 NEXT_PUBLIC_API_URL 为对外可达地址（如 http://your-server-ip-or-domain:18000）
+# 【重要】此变量在构建阶段硬编码进前端产物；本机访问可保持默认 localhost，
+# 但若部署到服务器供他人访问，必须在构建前改为实际的服务器 IP 或域名
+```
+
+#### 3. 启动服务
+```bash
+docker compose up -d --build
+# 如使用旧版 docker-compose: docker-compose up -d --build
+```
+
+启动后访问：
+- 前端: http://localhost:13000
+- 后端 API: http://localhost:18000
+
 ---
 
 ## 📂 项目结构
